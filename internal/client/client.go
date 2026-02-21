@@ -130,7 +130,8 @@ func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if err == context.DeadlineExceeded || err == context.Canceled {
+	// Only retry deadline exceeded, not canceled (user explicitly canceled)
+	if err == context.DeadlineExceeded {
 		return true
 	}
 	// Check for timeout errors

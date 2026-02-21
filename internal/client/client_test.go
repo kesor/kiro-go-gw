@@ -242,7 +242,7 @@ func TestIsRetryableError(t *testing.T) {
 		expected bool
 	}{
 		{"context deadline", context.DeadlineExceeded, true},
-		{"context canceled", context.Canceled, true},
+		{"context canceled", context.Canceled, false}, // User canceled, don't retry
 		{"nil error", nil, false},
 		{"random error", errors.New("random"), false},
 	}
