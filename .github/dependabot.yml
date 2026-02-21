@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: "go"
+  - package-ecosystem: "gomod"
     open-pull-requests-limit: 10
     versioning-strategy: "increase-if-necessary"
     directory: "/"
