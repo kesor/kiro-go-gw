@@ -1,8 +1,14 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     versioning-strategy: "increase-if-necessary"
     directory: "/"
     schedule:
       interval: "weekly"
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "security"
+    assignees:
+      - "kesor"
