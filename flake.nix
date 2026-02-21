@@ -4,6 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    src.url = "github:kesor/kiro-go-gw";
+    src.flake = false;
   };
 
   outputs =
@@ -11,6 +13,7 @@
       self,
       nixpkgs,
       flake-utils,
+      src,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -18,12 +21,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
-        packages.kiro-go-gw = pkgs.buildGoModule {
+        packages.kiro-go-gw = pkgs.buildGoApplication {
           pname = "kiro-go-gw";
           version = "0.1.0";
-          src = ./.;
-          vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-          subPackages = [ "./cmd/server" ];
+          src = src;
+          go = pkgs.go_1_23;
+          subPackages = [ "cmd/server" ];
           buildInputs = [ pkgs.sqlite ];
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
