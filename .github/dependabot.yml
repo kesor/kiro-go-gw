@@ -2,7 +2,6 @@ version: 2
 updates:
   - package-ecosystem: "gomod"
     open-pull-requests-limit: 5
-    versioning-strategy: "increase-if-necessary"
     directory: "/"
     schedule:
       interval: "weekly"
