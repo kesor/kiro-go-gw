@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+echo "Running go vet..."
+go vet ./...
+
+echo "Checking formatting..."
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+    echo "Files not formatted:"
+    echo "$unformatted"
+    exit 1
+fi
+
+echo "Running tests..."
+go test -race ./...
+
+echo "Checking go mod tidy..."
+go mod tidy -e
+if [ -n "$(git diff --stat go.mod go.sum)" ]; then
+    echo "go.mod or go.sum need updates:"
+    git diff go.mod go.sum
+    exit 1
+fi

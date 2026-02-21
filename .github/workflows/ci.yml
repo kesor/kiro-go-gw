@@ -1,0 +1,66 @@
+name: Go CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: coverage
+          path: coverage.out
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Check go mod tidy
+        run: |
+          go mod tidy -e
+          if [ -n "$(git diff --stat go.mod go.sum)" ]; then
+            echo "go.mod or go.sum need updates:"
+            git diff go.mod go.sum
+            exit 1
+          fi
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
