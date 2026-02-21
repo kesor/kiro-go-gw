@@ -16,7 +16,7 @@ jobs:
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.state == 'open'
     steps:
       - name: Wait for required checks to pass
-        run: gh pr checks "$PR_URL" --watch --fail-fast
+        run: gh pr checks "$PR_URL" --watch --fail-fast --exclude "auto-merge"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
