@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -240,11 +242,12 @@ func generateConversationID() string {
 }
 
 func randomHex(n int) string {
-	result := make([]byte, n)
-	for i := range result {
-		result[i] = "0123456789abcdef"[i%16]
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based if crypto rand fails
+		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
-	return string(result)
+	return hex.EncodeToString(b)[:n]
 }
 
 func (s *Server) Start(addr string) error {

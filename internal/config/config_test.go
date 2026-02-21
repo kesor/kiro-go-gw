@@ -54,7 +54,7 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Errorf("RefreshToken: got %q, want %q", cfg.RefreshToken, "test-token")
 	}
 	if cfg.ProfileArn != "arn:aws:test:profile" {
-		t.Errorf("ProfileArn: got %q, want %q", cfg.ProfileArn, "arn:aws:test")
+		t.Errorf("ProfileArn: got %q, want %q", cfg.ProfileArn, "arn:aws:test:profile")
 	}
 	if cfg.Region != "eu-west-1" {
 		t.Errorf("Region: got %q, want %q", cfg.Region, "eu-west-1")

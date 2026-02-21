@@ -2,6 +2,8 @@ package streaming
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -216,10 +218,14 @@ func ParseStream(reader io.Reader) <-chan string {
 	go func() {
 		defer close(ch)
 		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0), 1024*1024) // 1MB max token size
 
 		for scanner.Scan() {
 			line := scanner.Text()
 			ch <- line
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- "data: {\"error\":\"" + err.Error() + "\"}\n\n"
 		}
 	}()
 
@@ -233,6 +239,7 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 	go func() {
 		defer close(ch)
 		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0), 1024*1024) // 1MB max token size
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -249,6 +256,9 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 				ch <- output
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			ch <- "data: {\"error\":\"" + err.Error() + "\"}\n\n"
+		}
 	}()
 
 	return ch, nil
@@ -261,6 +271,7 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 	var finishReason string
 
 	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0), 1024*1024) // 1MB max token size
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -298,6 +309,9 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanner error: %w", err)
+	}
 
 	resp := &models.ChatCompletionResponse{
 		ID:      handler.CompletionID(),
@@ -328,9 +342,10 @@ func generateCompletionID() string {
 }
 
 func randomHex(n int) string {
-	b := make([]byte, n/2+1)
-	for i := range b {
-		b[i] = byte((i*7 + 13) % 16)
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based if crypto rand fails
+		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
-	return fmt.Sprintf("%x", b)
+	return hex.EncodeToString(b)[:n]
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -186,7 +187,9 @@ func (am *AuthManager) loadFromFile(filePath string) error {
 
 	// Handle enterprise device registration
 	if creds.ClientIDHash != "" {
-		_ = am.loadEnterpriseDeviceRegistration(creds.ClientIDHash)
+		if err := am.loadEnterpriseDeviceRegistration(creds.ClientIDHash); err != nil {
+			log.Printf("Warning: failed to load enterprise device registration: %v", err)
+		}
 	}
 
 	return nil
@@ -327,7 +330,7 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 	client := cognitoidentityprovider.NewFromConfig(awsCfg)
 
 	resp, err := client.InitiateAuth(context.TODO(), &cognitoidentityprovider.InitiateAuthInput{
-		AuthFlow: types.AuthFlowTypeUserPasswordAuth,
+		AuthFlow: types.AuthFlowTypeRefreshTokenAuth,
 		AuthParameters: map[string]string{
 			"REFRESH_TOKEN": am.refreshToken,
 		},
