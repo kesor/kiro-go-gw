@@ -2,9 +2,9 @@ name: Go CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
 
 jobs:
   test:
@@ -44,8 +44,9 @@ jobs:
 
       - name: Check formatting
         run: |
-          if [ -n "$(gofmt -l .)" ]; then
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
             echo "Files not formatted:"
-            gofmt -l .
+            echo "$unformatted"
             exit 1
           fi

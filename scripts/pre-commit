@@ -5,9 +5,10 @@ echo "Running go vet..."
 go vet ./...
 
 echo "Checking formatting..."
-if [ -n "$(gofmt -l .)" ]; then
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
     echo "Files not formatted:"
-    gofmt -l .
+    echo "$unformatted"
     exit 1
 fi
 
