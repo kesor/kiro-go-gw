@@ -9,23 +9,22 @@
   };
 
   outputs =
-    {
+    inputs@{
       self,
       nixpkgs,
       flake-utils,
-      src,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        go = pkgs.go_1_23;
       in
       {
         packages.kiro-go-gw = pkgs.buildGoApplication {
+          inherit (inputs) src go;
           pname = "kiro-go-gw";
           version = "0.1.0";
-          src = src;
-          go = pkgs.go_1_23;
           subPackages = [ "cmd/server" ];
           CGO_ENABLED = 1;
           buildInputs = [ pkgs.sqlite ];
@@ -36,7 +35,7 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            pkgs.go_1_23
+            go
             pkgs.sqlite
             pkgs.pkg-config
           ];
