@@ -3,6 +3,9 @@ package auth
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -231,9 +234,9 @@ func TestLoadFromSQLite_PriorityOrder(t *testing.T) {
 	am := &AuthManager{}
 	am.loadFromSQLite(tmpFile.Name())
 
-	// Should pick first match in priority order
-	if am.accessToken != "odic-token" {
-		t.Errorf("should pick odic token first, got: %q", am.accessToken)
+	// Should pick first match in priority order (social:token > odic:token > codewhisperer:odic:token)
+	if am.accessToken != "social-token" {
+		t.Errorf("should pick social token first (highest priority), got: %q", am.accessToken)
 	}
 }
 
@@ -461,5 +464,367 @@ func TestTokenDataStruct(t *testing.T) {
 	}
 	if token.ProfileArn != "arn:aws:test" {
 		t.Errorf("ProfileArn: got %q, want arn:aws:test", token.ProfileArn)
+	}
+}
+
+func TestAuthManagerWithRealCredentials(t *testing.T) {
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	am, err := NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", am.authType)
+	t.Logf("Profile ARN: %s", am.profileArn)
+	t.Logf("SSO Region: %s", am.ssoRegion)
+	t.Logf("Has refresh token: %v", am.refreshToken != "")
+	t.Logf("Token expires: %v", am.expiresAt)
+	t.Logf("Token expired: %v", am.isTokenExpired())
+	t.Logf("Token expiring soon: %v", am.isTokenExpiringSoon())
+
+	token, err := am.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+
+	if token == "" {
+		t.Fatal("Got empty access token")
+	}
+
+	t.Logf("Got access token: %s...", token[:min(20, len(token))])
+
+	if am.isTokenExpired() {
+		t.Error("Token should not be expired after GetAccessToken")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func TestRefreshTokenKiroDesktop_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/refreshToken" {
+			t.Errorf("Expected path /refreshToken, got %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Errorf("Expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		var payload map[string]string
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &payload)
+
+		if payload["refreshToken"] != "test-refresh-token" {
+			t.Errorf("Expected refreshToken 'test-refresh-token', got %s", payload["refreshToken"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"accessToken":  "new-access-token",
+			"refreshToken": "new-refresh-token",
+			"expiresIn":    3600,
+		})
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL + "/refreshToken",
+	}
+
+	err := am.refreshTokenKiroDesktop()
+	if err != nil {
+		t.Fatalf("refreshTokenKiroDesktop failed: %v", err)
+	}
+
+	if am.accessToken != "new-access-token" {
+		t.Errorf("accessToken: got %q, want %q", am.accessToken, "new-access-token")
+	}
+	if am.refreshToken != "new-refresh-token" {
+		t.Errorf("refreshToken: got %q, want %q", am.refreshToken, "new-refresh-token")
+	}
+	if am.expiresAt.IsZero() {
+		t.Error("expiresAt should not be zero")
+	}
+}
+
+func TestRefreshTokenKiroDesktop_NoRefreshToken(t *testing.T) {
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		refreshToken: "",
+	}
+
+	err := am.refreshTokenKiroDesktop()
+	if err == nil {
+		t.Error("Expected error when refresh token is empty")
+	}
+}
+
+func TestRefreshTokenKiroDesktop_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL,
+	}
+
+	err := am.refreshTokenKiroDesktop()
+	if err == nil {
+		t.Error("Expected error when server returns 500")
+	}
+}
+
+func TestRefreshTokenAWSSSO_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			t.Errorf("Expected path /token, got %s", r.URL.Path)
+		}
+		if r.Method != "POST" {
+			t.Errorf("Expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		var payload map[string]string
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &payload)
+
+		if payload["grantType"] != "refresh_token" {
+			t.Errorf("Expected grantType 'refresh_token', got %s", payload["grantType"])
+		}
+		if payload["clientId"] != "test-client-id" {
+			t.Errorf("Expected clientId 'test-client-id', got %s", payload["clientId"])
+		}
+		if payload["clientSecret"] != "test-client-secret" {
+			t.Errorf("Expected clientSecret 'test-client-secret', got %s", payload["clientSecret"])
+		}
+		if payload["refreshToken"] != "test-refresh-token" {
+			t.Errorf("Expected refreshToken 'test-refresh-token', got %s", payload["refreshToken"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"accessToken":  "new-aws-access-token",
+			"refreshToken": "new-aws-refresh-token",
+			"expiresIn":    3600,
+		})
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		ssoRegion:    "us-east-1",
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL + "/token",
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err != nil {
+		t.Fatalf("refreshTokenAWSSSO failed: %v", err)
+	}
+
+	if am.accessToken != "new-aws-access-token" {
+		t.Errorf("accessToken: got %q, want %q", am.accessToken, "new-aws-access-token")
+	}
+	if am.refreshToken != "new-aws-refresh-token" {
+		t.Errorf("refreshToken: got %q, want %q", am.refreshToken, "new-aws-refresh-token")
+	}
+	if am.expiresAt.IsZero() {
+		t.Error("expiresAt should not be zero")
+	}
+}
+
+func TestRefreshTokenAWSSSO_NoClientID(t *testing.T) {
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		refreshToken: "test-refresh-token",
+		clientID:     "",
+		clientSecret: "test-client-secret",
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err == nil {
+		t.Error("Expected error when clientID is empty")
+	}
+}
+
+func TestRefreshTokenAWSSSO_NoClientSecret(t *testing.T) {
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		refreshToken: "test-refresh-token",
+		clientID:     "test-client-id",
+		clientSecret: "",
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err == nil {
+		t.Error("Expected error when clientSecret is empty")
+	}
+}
+
+func TestRefreshTokenAWSSSO_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		ssoRegion:    "us-east-1",
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL + "/token",
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err == nil {
+		t.Error("Expected error when server returns 500")
+	}
+}
+
+func TestRefreshTokenAWSSSO_InvalidResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			// Missing accessToken (camelCase to match actual API)
+			"refreshToken": "new-refresh-token",
+		})
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "us-east-1"},
+		ssoRegion:    "us-east-1",
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL + "/token",
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err == nil {
+		t.Error("Expected error when response missing accessToken")
+	}
+}
+
+func TestRefreshTokenAWSSSO_UsesDefaultRegion(t *testing.T) {
+	callCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"accessToken": "new-token",
+		})
+	}))
+	defer server.Close()
+
+	am := &AuthManager{
+		config:       &AuthConfig{Region: "eu-west-1"},
+		ssoRegion:    "", // Not set, should fall back to config region
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		refreshToken: "test-refresh-token",
+		refreshURL:   server.URL + "/token", // Override URL to hit test server
+	}
+
+	err := am.refreshTokenAWSSSO()
+	if err != nil {
+		t.Fatalf("refreshTokenAWSSSO failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Errorf("Expected 1 request, got %d", callCount)
+	}
+}
+
+func TestAuthTypeDetection(t *testing.T) {
+	tests := []struct {
+		name         string
+		clientID     string
+		clientSecret string
+		want         AuthType
+	}{
+		{
+			name:         "with both client credentials",
+			clientID:     "test-id",
+			clientSecret: "test-secret",
+			want:         AuthTypeAWSSSO,
+		},
+		{
+			name:         "without client credentials",
+			clientID:     "",
+			clientSecret: "",
+			want:         AuthTypeKiroDesktop,
+		},
+		{
+			name:         "only client ID",
+			clientID:     "test-id",
+			clientSecret: "",
+			want:         AuthTypeKiroDesktop,
+		},
+		{
+			name:         "only client secret",
+			clientID:     "",
+			clientSecret: "test-secret",
+			want:         AuthTypeKiroDesktop,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			am := &AuthManager{
+				config:       &AuthConfig{Region: "us-east-1"},
+				clientID:     tt.clientID,
+				clientSecret: tt.clientSecret,
+			}
+			am.detectAuthType()
+
+			if am.authType != tt.want {
+				t.Errorf("authType: got %v, want %v", am.authType, tt.want)
+			}
+		})
 	}
 }

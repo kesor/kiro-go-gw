@@ -53,12 +53,23 @@ func normalizeModelName(name string) string {
 	name = strings.ReplaceAll(name, "-3-5", "-3.5")
 	name = strings.ReplaceAll(name, "-3-0", "-3.0")
 
-	// Strip date suffix
+	// Strip date suffix or "latest" suffix
 	// claude-haiku-4-5-20251001 -> claude-haiku-4.5
+	// claude-haiku-4-5-latest -> claude-haiku-4.5
 	parts := strings.Split(name, "-")
 	if len(parts) > 0 {
 		last := parts[len(parts)-1]
-		if len(last) == 8 { // date like 20251001
+		isDate := len(last) == 8
+		if isDate {
+			for _, c := range last {
+				if c < '0' || c > '9' {
+					isDate = false
+					break
+				}
+			}
+		}
+
+		if isDate || last == "latest" {
 			parts = parts[:len(parts)-1]
 			// Rejoin and fix the version
 			if len(parts) > 0 {

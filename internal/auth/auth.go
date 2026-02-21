@@ -1,20 +1,18 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
-	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -34,9 +32,9 @@ const (
 
 var (
 	tokenKeys = []string{
+		"kirocli:social:token",
 		"kirocli:odic:token",
 		"codewhisperer:odic:token",
-		"kirocli:social:token",
 	}
 	registrationKeys = []string{
 		"kirocli:odic:device-registration",
@@ -83,7 +81,7 @@ type AuthManager struct {
 	ssoRegion    string
 	profileArn   string
 
-	awsClient *cognitoidentityprovider.Client
+	refreshURL string
 }
 
 type AuthConfig struct {
@@ -126,18 +124,6 @@ func NewAuthManager(cfg *AuthConfig) (*AuthManager, error) {
 
 	// Detect auth type
 	am.detectAuthType()
-
-	// Initialize AWS client if needed
-	if am.authType == AuthTypeAWSSSO {
-		awsCfg, err := config.LoadDefaultConfig(context.TODO(),
-			config.WithRegion(am.ssoRegion),
-			config.WithCredentialsProvider(aws.AnonymousCredentials{}),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load AWS config: %w", err)
-		}
-		am.awsClient = cognitoidentityprovider.NewFromConfig(awsCfg)
-	}
 
 	return am, nil
 }
@@ -324,38 +310,58 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 		return fmt.Errorf("refresh token is not set")
 	}
 
-	// Use AWS SDK for token refresh
-	awsCfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(am.config.Region),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to load AWS config: %w", err)
+	refreshURL := fmt.Sprintf("https://prod.%s.auth.desktop.kiro.dev/refreshToken", am.config.Region)
+	if am.refreshURL != "" {
+		refreshURL = am.refreshURL
 	}
 
-	client := cognitoidentityprovider.NewFromConfig(awsCfg)
+	payload := map[string]string{
+		"refreshToken": am.refreshToken,
+	}
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal refresh payload: %w", err)
+	}
 
-	resp, err := client.InitiateAuth(context.TODO(), &cognitoidentityprovider.InitiateAuthInput{
-		AuthFlow: types.AuthFlowTypeRefreshTokenAuth,
-		AuthParameters: map[string]string{
-			"REFRESH_TOKEN": am.refreshToken,
-		},
-		ClientId: aws.String(am.clientID),
-	})
+	req, err := http.NewRequestWithContext(context.TODO(), "POST", refreshURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("failed to create refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to refresh token: %w", err)
 	}
+	defer resp.Body.Close()
 
-	if resp.AuthenticationResult == nil {
-		return fmt.Errorf("no authentication result in response")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("token refresh failed with status: %d", resp.StatusCode)
 	}
 
-	am.accessToken = *resp.AuthenticationResult.AccessToken
-	if resp.AuthenticationResult.RefreshToken != nil {
-		am.refreshToken = *resp.AuthenticationResult.RefreshToken
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode refresh response: %w", err)
 	}
-	if resp.AuthenticationResult.ExpiresIn > 0 {
-		am.expiresAt = time.Now().Add(time.Duration(resp.AuthenticationResult.ExpiresIn) * time.Second).Add(-60 * time.Second)
+
+	accessToken, ok := result["accessToken"].(string)
+	if !ok || accessToken == "" {
+		return fmt.Errorf("response does not contain accessToken")
 	}
+
+	am.accessToken = accessToken
+	if refreshToken, ok := result["refreshToken"].(string); ok && refreshToken != "" {
+		am.refreshToken = refreshToken
+	}
+	if expiresIn, ok := result["expiresIn"].(float64); ok && expiresIn > 0 {
+		am.expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second).Add(-60 * time.Second)
+	}
+	if profileArn, ok := result["profileArn"].(string); ok && profileArn != "" {
+		am.profileArn = profileArn
+	}
+
+	log.Printf("Token refreshed via Kiro Desktop Auth, expires: %v", am.expiresAt)
 
 	return nil
 }
@@ -371,38 +377,69 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 		return fmt.Errorf("client secret is not set (required for AWS SSO)")
 	}
 
-	if am.awsClient == nil {
-		awsCfg, err := config.LoadDefaultConfig(context.TODO(),
-			config.WithRegion(am.ssoRegion),
-		)
-		if err != nil {
-			return fmt.Errorf("failed to load AWS config: %w", err)
-		}
-		am.awsClient = cognitoidentityprovider.NewFromConfig(awsCfg)
+	ssoRegion := am.ssoRegion
+	if ssoRegion == "" {
+		ssoRegion = am.config.Region
 	}
 
-	resp, err := am.awsClient.InitiateAuth(context.TODO(), &cognitoidentityprovider.InitiateAuthInput{
-		AuthFlow: types.AuthFlowTypeRefreshTokenAuth,
-		AuthParameters: map[string]string{
-			"REFRESH_TOKEN": am.refreshToken,
-		},
-		ClientId: aws.String(am.clientID),
-	})
+	refreshURL := fmt.Sprintf("https://oidc.%s.amazonaws.com/token", ssoRegion)
+	if am.refreshURL != "" {
+		refreshURL = am.refreshURL
+	}
+
+	payload := map[string]string{
+		"grantType":    "refresh_token",
+		"clientId":     am.clientID,
+		"clientSecret": am.clientSecret,
+		"refreshToken": am.refreshToken,
+	}
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal refresh payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(context.TODO(), "POST", refreshURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("failed to create refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	clientIDLog := am.clientID
+	if len(clientIDLog) > 8 {
+		clientIDLog = clientIDLog[:8]
+	}
+	log.Printf("Refreshing token via AWS SSO OIDC: url=%s, clientId=%s...", refreshURL, clientIDLog)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to refresh AWS SSO token: %w", err)
 	}
+	defer resp.Body.Close()
 
-	if resp.AuthenticationResult == nil {
-		return fmt.Errorf("no authentication result in response")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("AWS SSO token refresh failed with status: %d", resp.StatusCode)
 	}
 
-	am.accessToken = *resp.AuthenticationResult.AccessToken
-	if resp.AuthenticationResult.RefreshToken != nil {
-		am.refreshToken = *resp.AuthenticationResult.RefreshToken
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode refresh response: %w", err)
 	}
-	if resp.AuthenticationResult.ExpiresIn > 0 {
-		am.expiresAt = time.Now().Add(time.Duration(resp.AuthenticationResult.ExpiresIn) * time.Second).Add(-60 * time.Second)
+
+	accessToken, ok := result["accessToken"].(string)
+	if !ok || accessToken == "" {
+		return fmt.Errorf("response does not contain accessToken")
 	}
+
+	am.accessToken = accessToken
+	if refreshToken, ok := result["refreshToken"].(string); ok && refreshToken != "" {
+		am.refreshToken = refreshToken
+	}
+	if expiresIn, ok := result["expiresIn"].(float64); ok && expiresIn > 0 {
+		am.expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second).Add(-60 * time.Second)
+	}
+
+	log.Printf("Token refreshed via AWS SSO OIDC, expires: %v", am.expiresAt)
 
 	return nil
 }
