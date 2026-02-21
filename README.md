@@ -120,6 +120,14 @@ go test ./...
 go test ./... -cover
 ```
 
+### Pre-commit Hooks
+
+To install the pre-commit hook:
+
+```bash
+ln -s ../../scripts/pre-commit .git/hooks/pre-commit
+```
+
 ## Architecture
 
 ```

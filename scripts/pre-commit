@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+echo "Running go vet..."
+go vet ./...
+
+echo "Checking formatting..."
+if [ -n "$(gofmt -l .)" ]; then
+    echo "Files not formatted:"
+    gofmt -l .
+    exit 1
+fi
+
+echo "Running tests..."
+go test ./...
