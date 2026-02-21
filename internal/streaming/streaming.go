@@ -303,7 +303,7 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 						toolCalls = chunk.Choices[0].Delta.ToolCalls
 					}
 				}
-				if chunk.Choices[0].FinishReason != "" {
+				if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
 					finishReason = chunk.Choices[0].FinishReason
 				}
 			}
