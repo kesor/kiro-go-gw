@@ -30,7 +30,7 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
 	log.Printf("Starting Kiro Gateway on %s", addr)
-	
+
 	if err := srv.Start(addr); err != nil {
 		log.Fatal(err)
 	}

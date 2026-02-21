@@ -19,7 +19,7 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	}
 
 	payload := map[string]interface{}{
-		"conversationId":   conversationID,
+		"conversationId":  conversationID,
 		"messages":        messages,
 		"profileArn":      profileArnForPayload,
 		"modelId":         normalizeModelName(req.Model),
@@ -52,7 +52,7 @@ func normalizeModelName(name string) string {
 	name = strings.ReplaceAll(name, "-4-0", "-4.0")
 	name = strings.ReplaceAll(name, "-3-5", "-3.5")
 	name = strings.ReplaceAll(name, "-3-0", "-3.0")
-	
+
 	// Strip date suffix
 	// claude-haiku-4-5-20251001 -> claude-haiku-4.5
 	parts := strings.Split(name, "-")
@@ -70,7 +70,7 @@ func normalizeModelName(name string) string {
 			name = strings.Join(parts, "-")
 		}
 	}
-	
+
 	return name
 }
 
@@ -109,9 +109,9 @@ func convertMessages(msgs []models.ChatMessage) (string, []map[string]interface{
 			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
 				toolCalls = append(toolCalls, map[string]interface{}{
-					"type": "toolUse",
-					"id":   tc.ID,
-					"name": tc.Function.Name,
+					"type":  "toolUse",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
 					"input": parseArguments(tc.Function.Arguments),
 				})
 			}
