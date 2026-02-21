@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -100,7 +101,8 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 			// Token expired, refresh and retry
 			resp.Body.Close()
 			if _, err := c.authManager.ForceRefresh(); err != nil {
-				return nil, fmt.Errorf("token refresh failed: %w", err)
+				log.Printf("Token refresh failed: %v", err)
+				return nil, fmt.Errorf("authentication failed")
 			}
 			continue
 		case resp.StatusCode == http.StatusTooManyRequests:

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"kiro-go-gw/internal/auth"
@@ -266,9 +269,36 @@ func Run() {
 		os.Exit(1)
 	}
 
-	// Start server
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
-	if err := srv.Start(addr); err != nil {
-		log.Fatal(err)
+
+	// Create HTTP server
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: srv,
 	}
+
+	// Start server in goroutine
+	go func() {
+		log.Printf("Starting Kiro Gateway on %s", addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Server exited")
 }

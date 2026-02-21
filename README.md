@@ -35,8 +35,10 @@ Set these environment variables:
 |----------|-------------|---------|
 | `SERVER_HOST` | Listen address | `0.0.0.0` |
 | `SERVER_PORT` | Listen port | `8000` |
-| `PROXY_API_KEY` | API key for clients | `my-super-secret-password-123` |
+| `PROXY_API_KEY` | **Required** - API key for clients | (none) |
 | `KIRO_REGION` | AWS region | `us-east-1` |
+
+> **Important**: You must set a strong, unique `PROXY_API_KEY` before running the server.
 
 ### Authentication (choose one)
 

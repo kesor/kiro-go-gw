@@ -18,8 +18,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ServerPort != 8000 {
 		t.Errorf("ServerPort: got %d, want %d", cfg.ServerPort, 8000)
 	}
-	if cfg.ProxyAPIKey != "my-super-secret-password-123" {
-		t.Errorf("ProxyAPIKey: got %q, want %q", cfg.ProxyAPIKey, "my-super-secret-password-123")
+	if cfg.ProxyAPIKey != "" {
+		t.Errorf("ProxyAPIKey: got %q, want empty (required, no default)", cfg.ProxyAPIKey)
 	}
 	if cfg.Region != "us-east-1" {
 		t.Errorf("Region: got %q, want %q", cfg.Region, "us-east-1")

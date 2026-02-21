@@ -204,9 +204,9 @@ func TestLoadFromSQLite_FileNotFound(t *testing.T) {
 	am := &AuthManager{}
 	err := am.loadFromSQLite("/nonexistent/db.sqlite3")
 
-	// Should not error - gracefully handles missing file
-	if err != nil {
-		t.Errorf("loadFromSQLite should handle missing file gracefully: %v", err)
+	// Should return error for missing file
+	if err == nil {
+		t.Error("loadFromSQLite should error on missing file")
 	}
 }
 

@@ -225,9 +225,14 @@ func (am *AuthManager) loadEnterpriseDeviceRegistration(clientIDHash string) err
 func (am *AuthManager) loadFromSQLite(dbPath string) error {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open SQLite database: %w", err)
 	}
 	defer db.Close()
+
+	// Verify connection works
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("failed to ping SQLite database: %w", err)
+	}
 
 	// Try to load token
 	for _, key := range tokenKeys {

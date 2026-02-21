@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -25,16 +26,25 @@ func Load() *Config {
 			return ""
 		}
 		if p[0] == '~' {
-			home, _ := os.UserHomeDir()
-			return filepath.Join(home, p[1:])
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return p // Return unchanged if home unavailable
+			}
+			cleanPath := filepath.Clean(filepath.Join(home, p[1:]))
+			// Verify the path is still within home directory
+			if !strings.HasPrefix(cleanPath, home+string(filepath.Separator)) && cleanPath != home {
+				return p // Path traversal attempt, return unchanged
+			}
+			return cleanPath
 		}
-		return p
+		// Also clean and validate absolute paths
+		return filepath.Clean(p)
 	}
 
 	return &Config{
 		ServerHost:   getEnv("SERVER_HOST", "0.0.0.0"),
 		ServerPort:   getEnvInt("SERVER_PORT", 8000),
-		ProxyAPIKey:  getEnv("PROXY_API_KEY", "my-super-secret-password-123"),
+		ProxyAPIKey:  getEnv("PROXY_API_KEY", ""),
 		RefreshToken: getEnv("REFRESH_TOKEN", ""),
 		ProfileArn:   getEnv("PROFILE_ARN", ""),
 		Region:       getEnv("KIRO_REGION", "us-east-1"),
