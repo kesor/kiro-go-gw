@@ -27,11 +27,20 @@
           src = src;
           go = pkgs.go_1_23;
           subPackages = [ "cmd/server" ];
+          CGO_ENABLED = 1;
           buildInputs = [ pkgs.sqlite ];
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
 
         packages.default = self.packages.${system}.kiro-go-gw;
+
+        devShells.default = pkgs.mkShell {
+          buildInputs = [
+            pkgs.go_1_23
+            pkgs.sqlite
+            pkgs.pkg-config
+          ];
+        };
       }
     );
 }
