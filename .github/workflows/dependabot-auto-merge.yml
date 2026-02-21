@@ -18,7 +18,7 @@ jobs:
         run: |
           PR=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number -q '.[0].number')
           if [ -n "$PR" ]; then
-            gh pr merge --auto --squash --delete-branch "$PR"
+            gh pr merge --auto --squash "$PR"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
