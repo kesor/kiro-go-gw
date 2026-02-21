@@ -2,7 +2,7 @@
   description = "Kiro Gateway - Proxy for Amazon Q/CodeWhisperer API";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -24,7 +24,6 @@
           src = ./.;
           vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
           subPackages = [ "./cmd/server" ];
-          CGO_ENABLED = 1;
           buildInputs = [ pkgs.sqlite ];
           nativeBuildInputs = [ pkgs.pkg-config ];
         };
