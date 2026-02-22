@@ -123,6 +123,14 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	modelList := make([]models.Model, 0, len(kiroModels.Models))
 	for _, m := range kiroModels.Models {
+		maxInputTokens := 0
+		if m.TokenLimits != nil {
+			maxInputTokens = m.TokenLimits.MaxInputTokens
+		}
+		supportsPromptCaching := false
+		if m.PromptCaching != nil {
+			supportsPromptCaching = m.PromptCaching.SupportsPromptCaching
+		}
 		modelList = append(modelList, models.Model{
 			ID:                    m.ModelID,
 			Object:                "model",
@@ -132,8 +140,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			Description:           m.Description,
 			RateMultiplier:        m.RateMultiplier,
 			RateUnit:              m.RateUnit,
-			MaxInputTokens:        m.TokenLimits.MaxInputTokens,
-			SupportsPromptCaching: m.PromptCaching.SupportsPromptCaching,
+			MaxInputTokens:        maxInputTokens,
+			SupportsPromptCaching: supportsPromptCaching,
 		})
 	}
 
