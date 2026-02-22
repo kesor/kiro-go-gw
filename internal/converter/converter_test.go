@@ -52,14 +52,21 @@ func TestBuildKiroPayload_Basic(t *testing.T) {
 	if userInputMsg["origin"] != "AI_EDITOR" {
 		t.Errorf("origin: got %v, want AI_EDITOR", userInputMsg["origin"])
 	}
-	if userInputMsg["content"] != "Hello" {
-		t.Errorf("content: got %v, want Hello", userInputMsg["content"])
+	// Content is now an array of content blocks
+	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("content is not an array of content blocks")
+	}
+	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Hello" {
+		t.Errorf("content: got %v, want [{text: Hello}]", contentBlocks)
 	}
 
-	// Check history contains previous messages
-	history, ok := convState["history"].([]interface{})
-	if !ok || len(history) == 0 {
-		t.Logf("history: got %v (may be empty for simple requests)", convState["history"])
+	// Check history contains previous messages (all messages for now)
+	history, ok := convState["history"].([]map[string]interface{})
+	if !ok {
+		t.Logf("history: not found or wrong type")
+	} else if len(history) > 0 {
+		t.Logf("history has %d messages", len(history))
 	}
 }
 
@@ -221,10 +228,48 @@ func TestBuildKiroPayload_ToolCalls(t *testing.T) {
 		t.Fatal("currentMessage not found in conversationState")
 	}
 
-	// Verify we can find the tool calls in the payload
-	// (the exact structure depends on how tool calls are handled)
-	_ = currentMsg
-	_ = ok
+	// Verify user message content
+	userInputMsg, ok := currentMsg["userInputMessage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("userInputMessage not found")
+	}
+	// Content is now an array of content blocks
+	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("content is not an array of content blocks")
+	}
+	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Calculate 2+2" {
+		t.Errorf("content: got %v, want [{text: Calculate 2+2}]", contentBlocks)
+	}
+
+	// Check history contains the assistant message with tool calls
+	history, ok := convState["history"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("history not found or wrong type")
+	}
+
+	foundToolCalls := false
+	for _, msg := range history {
+		if toolCalls, exists := msg["toolCalls"]; exists {
+			// Handle both []interface{} and []map[string]interface{} types
+			switch tc := toolCalls.(type) {
+			case []interface{}:
+				if len(tc) > 0 {
+					foundToolCalls = true
+				}
+			case []map[string]interface{}:
+				if len(tc) > 0 {
+					foundToolCalls = true
+				}
+			}
+			if foundToolCalls {
+				break
+			}
+		}
+	}
+	if !foundToolCalls {
+		t.Error("Expected tool calls in history")
+	}
 }
 
 func TestBuildKiroPayload_ToolResults(t *testing.T) {
@@ -250,8 +295,45 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 	if !ok {
 		t.Fatal("conversationState not found in payload")
 	}
-	_ = convState
-	_ = ok
+
+	// Verify user message is currentMessage
+	currentMsg, ok := convState["currentMessage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("currentMessage not found")
+	}
+	userInputMsg, ok := currentMsg["userInputMessage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("userInputMessage not found")
+	}
+	// Content is now an array of content blocks
+	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("content is not an array of content blocks")
+	}
+	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "What is 2+2?" {
+		t.Errorf("content: got %v, want [{text: What is 2+2?}]", contentBlocks)
+	}
+
+	// Check history contains tool result
+	history, ok := convState["history"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("history not found or wrong type")
+	}
+
+	foundToolResult := false
+	for _, msg := range history {
+		role, _ := msg["role"].(string)
+		if role == "tool" {
+			toolUseID, _ := msg["toolUseId"].(string)
+			if toolUseID == "call_abc123" {
+				foundToolResult = true
+				break
+			}
+		}
+	}
+	if !foundToolResult {
+		t.Error("Expected tool result in history with toolUseId=call_abc123")
+	}
 }
 
 func TestBuildKiroPayload_ProfileArn(t *testing.T) {
@@ -479,5 +561,186 @@ func TestNormalizeModelName(t *testing.T) {
 				t.Errorf("normalizeModelName(%q): got %q, want %q", tt.input, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestBuildKiroPayload_MultiTurnConversation(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "First question"},
+			{Role: "assistant", Content: "First answer"},
+			{Role: "user", Content: "Second question"},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState, ok := payload["conversationState"].(map[string]interface{})
+	if !ok {
+		t.Fatal("conversationState not found")
+	}
+
+	// currentMessage should have the last user message
+	currentMsg, ok := convState["currentMessage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("currentMessage not found")
+	}
+	userInputMsg, ok := currentMsg["userInputMessage"].(map[string]interface{})
+	if !ok {
+		t.Fatal("userInputMessage not found")
+	}
+
+	// Content is now an array of content blocks
+	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("content is not an array of content blocks")
+	}
+	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Second question" {
+		t.Errorf("currentMessage content: got %v, want [{text: Second question}]", contentBlocks)
+	}
+
+	// History should have the previous messages
+	history, ok := convState["history"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("history wrong type: %T", convState["history"])
+	}
+
+	if len(history) != 2 {
+		t.Errorf("history length: got %d, want 2", len(history))
+	}
+}
+
+func TestBuildKiroPayload_NoUserMessage(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "assistant", Content: "Hello, how can I help?"},
+		},
+	}
+
+	_, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err == nil {
+		t.Fatal("Expected error for request with no user message")
+	}
+}
+
+func TestBuildKiroPayload_ToolCallsInHistory(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Calculate 2+2"},
+			{
+				Role:    "assistant",
+				Content: "I'll calculate that",
+				ToolCalls: []models.ToolCall{
+					{
+						ID:   "call_abc123",
+						Type: "function",
+						Function: &models.ToolCallFunction{
+							Name:      "calculator",
+							Arguments: `{"expression": "2+2"}`,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	history := convState["history"].([]map[string]interface{})
+
+	// Find the assistant message with tool calls in history
+	var foundToolCall bool
+	for _, msg := range history {
+		if toolCalls, ok := msg["toolCalls"]; ok {
+			// Handle both []interface{} and []map[string]interface{} types
+			switch tc := toolCalls.(type) {
+			case []interface{}:
+				if len(tc) > 0 {
+					foundToolCall = true
+				}
+			case []map[string]interface{}:
+				if len(tc) > 0 {
+					foundToolCall = true
+				}
+			}
+			if foundToolCall {
+				break
+			}
+		}
+	}
+
+	if !foundToolCall {
+		t.Error("Expected to find tool calls in history")
+	}
+}
+
+func TestBuildKiroPayload_WithImages(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{
+				Role: "user",
+				Content: []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": "What's in this image?",
+					},
+					map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": "https://example.com/image.png",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("content is not an array of content blocks")
+	}
+
+	if len(contentBlocks) != 2 {
+		t.Fatalf("expected 2 content blocks (text + image), got %d", len(contentBlocks))
+	}
+
+	textBlock := contentBlocks[0]
+	if textBlock["type"] != "text" || textBlock["text"] != "What's in this image?" {
+		t.Errorf("text block: got %v", textBlock)
+	}
+
+	imageBlock := contentBlocks[1]
+	if imageBlock["type"] != "image" {
+		t.Errorf("image block type: got %v", imageBlock["type"])
+	}
+	source, ok := imageBlock["source"].(map[string]interface{})
+	if !ok {
+		t.Fatal("image source not found")
+	}
+	if source["type"] != "url" {
+		t.Errorf("image source type: got %v", source["type"])
+	}
+	if source["url"] != "https://example.com/image.png" {
+		t.Errorf("image url: got %v", source["url"])
 	}
 }

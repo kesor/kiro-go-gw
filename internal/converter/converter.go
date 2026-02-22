@@ -9,28 +9,41 @@ import (
 )
 
 func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profileArn string) (map[string]interface{}, error) {
-	systemPrompt, messages := convertMessages(req.Messages)
+	systemPrompt, _ := convertMessages(req.Messages)
 	tools := convertTools(req.Tools)
 
 	// Find the last user message for currentMessage
-	var userContent string
-	var history []map[string]interface{}
+	var userContentBlocks []map[string]interface{}
+	var lastUserMsgIndex int = -1
 
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
-			userContent = extractTextContent(req.Messages[i].Content)
+			userContentBlocks = extractContentBlocks(req.Messages[i].Content)
+			lastUserMsgIndex = i
 			break
 		}
 	}
 
-	// If no user message found, error
-	if userContent == "" {
+	// If no user message found or no content blocks, error
+	if len(userContentBlocks) == 0 {
 		return nil, fmt.Errorf("no user message found in request")
 	}
 
-	// Build history from all converted messages
-	if len(messages) > 0 {
-		history = messages
+	// Build history from all messages EXCEPT the last user message
+	// (includes previous user/assistant exchanges and any assistant messages after the last user)
+	var history []map[string]interface{}
+	if lastUserMsgIndex < len(req.Messages)-1 {
+		// There are messages after the last user message (e.g., assistant response with tool_calls)
+		// Convert messages before the last user message
+		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
+		// Also add messages after the last user message to history
+		if lastUserMsgIndex+1 < len(req.Messages) {
+			_, afterUserMsgs := convertMessages(req.Messages[lastUserMsgIndex+1:])
+			history = append(history, afterUserMsgs...)
+		}
+	} else if lastUserMsgIndex > 0 {
+		// Last user message is not at the end, get messages before it
+		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
 	}
 
 	// Build conversationState structure (Kiro's native format)
@@ -39,7 +52,7 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		"conversationId":  conversationID,
 		"currentMessage": map[string]interface{}{
 			"userInputMessage": map[string]interface{}{
-				"content": userContent,
+				"content": userContentBlocks,
 				"modelId": normalizeModelName(req.Model),
 				"origin":  "AI_EDITOR",
 			},
@@ -257,6 +270,63 @@ func extractTextContent(content interface{}) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+func extractContentBlocks(content interface{}) []map[string]interface{} {
+	if content == nil {
+		return nil
+	}
+
+	var blocks []map[string]interface{}
+
+	switch v := content.(type) {
+	case string:
+		if v != "" {
+			blocks = append(blocks, map[string]interface{}{
+				"type": "text",
+				"text": v,
+			})
+		}
+	case []interface{}:
+		for _, item := range v {
+			if block, ok := item.(map[string]interface{}); ok {
+				blockType, _ := block["type"].(string)
+				if blockType == "text" {
+					if text, ok := block["text"].(string); ok && text != "" {
+						blocks = append(blocks, map[string]interface{}{
+							"type": "text",
+							"text": text,
+						})
+					}
+				} else if blockType == "image_url" {
+					if imgURL, ok := block["image_url"].(map[string]interface{}); ok {
+						if url, ok := imgURL["url"].(string); ok {
+							if strings.HasPrefix(url, "data:image") {
+								blocks = append(blocks, map[string]interface{}{
+									"type": "image",
+									"source": map[string]interface{}{
+										"type":      "base64",
+										"mediaType": extractMediaType(url),
+										"data":      extractBase64Data(url),
+									},
+								})
+							} else {
+								blocks = append(blocks, map[string]interface{}{
+									"type": "image",
+									"source": map[string]interface{}{
+										"type": "url",
+										"url":  url,
+									},
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return blocks
 }
 
 func extractImages(content interface{}) []map[string]interface{} {
