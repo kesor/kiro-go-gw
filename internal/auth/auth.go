@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -337,7 +338,8 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("token refresh failed with status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("token refresh failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
@@ -418,7 +420,8 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("AWS SSO token refresh failed with status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("AWS SSO token refresh failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
@@ -428,7 +431,7 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 
 	accessToken, ok := result["accessToken"].(string)
 	if !ok || accessToken == "" {
-		return fmt.Errorf("response does not contain accessToken")
+		return fmt.Errorf("response does not contain accessToken: %+v", result)
 	}
 
 	am.accessToken = accessToken
