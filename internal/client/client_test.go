@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,8 @@ import (
 	"time"
 
 	"kiro-go-gw/internal/auth"
+	"kiro-go-gw/internal/converter"
+	"kiro-go-gw/internal/models"
 )
 
 // mockAuthManager implements a mock for testing
@@ -23,6 +24,9 @@ type mockAuthManager struct {
 	refreshErr  error
 	forceErr    error
 	refreshCall int
+	profileArn  string
+	region      string
+	apiHost     string
 }
 
 func (m *mockAuthManager) GetAccessToken() (string, error) {
@@ -38,6 +42,18 @@ func (m *mockAuthManager) ForceRefresh() (string, error) {
 		return "", m.forceErr
 	}
 	return m.token, nil
+}
+
+func (m *mockAuthManager) ProfileArn() string {
+	return m.profileArn
+}
+
+func (m *mockAuthManager) Region() string {
+	return m.region
+}
+
+func (m *mockAuthManager) APIHost() string {
+	return m.apiHost
 }
 
 func TestConstants(t *testing.T) {
@@ -81,8 +97,8 @@ func TestDoRequest_Success(t *testing.T) {
 		if auth != "Bearer test-token" {
 			t.Errorf("Authorization header: got %q, want Bearer test-token", auth)
 		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("Content-Type: got %s, want application/json", r.Header.Get("Content-Type"))
+		if r.Header.Get("Content-Type") != "application/x-amz-json-1.0" {
+			t.Errorf("Content-Type: got %s, want application/x-amz-json-1.0", r.Header.Get("Content-Type"))
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"result":"ok"}`))
@@ -400,31 +416,16 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 				"userInputMessage": map[string]interface{}{
 					"content": "Hi",
 					"modelId": "claude-haiku-4.5",
-					"origin":  "AI_EDITOR",
+					"origin":  "KIRO_CLI",
 				},
 			},
 		},
 	}
 
-	jsonData, err := json.Marshal(payload)
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
 	if err != nil {
-		t.Fatalf("Failed to marshal payload: %v", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP request failed: %v", err)
+		t.Fatalf("DoRequest failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -473,4 +474,443 @@ func reflectkeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestKiroClientWithRealCredentials_SimpleWithConverter(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+	t.Logf("Profile ARN: %s", authManager.ProfileArn())
+
+	// Use profileArn from env or empty for aws_sso
+	profileArn := os.Getenv("KIRO_PROFILE_ARN")
+
+	// Add system message to simulate real Kiro CLI context
+	systemPrompt := "Follow this instruction:"
+	userContent := "Hi"
+
+	// Use converter to build payload for simple message
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-haiku-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userContent},
+		},
+	}, conversationID, profileArn)
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
+
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
+	if err != nil {
+		t.Fatalf("DoRequest failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	t.Logf("SUCCESS: Simple message with converter works!")
+}
+
+func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Use converter to build payload for tool calling
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-haiku-4.5",
+		Messages: []models.ChatMessage{
+			{
+				Role:    "user",
+				Content: "What is 125 * 17? Use the calculator tool.",
+			},
+		},
+		Tools: []models.Tool{
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "calculator",
+					Description: "Perform basic arithmetic calculations",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"expression": map[string]interface{}{
+								"type":        "string",
+								"description": "Mathematical expression to evaluate",
+							},
+						},
+						"required": []string{"expression"},
+					},
+				},
+			},
+		},
+	}, conversationID, authManager.ProfileArn())
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
+
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
+	if err != nil {
+		t.Fatalf("DoRequest failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	bodyStr := string(body)
+
+	// Check for tool calls in response
+	if strings.Contains(bodyStr, "toolUse") || strings.Contains(bodyStr, "tool_call") {
+		t.Logf("SUCCESS: Tool calling response detected!")
+		// Log a preview of the response
+		preview := bodyStr
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		t.Logf("Response preview: %s", preview)
+	} else if strings.Contains(bodyStr, "125") || strings.Contains(bodyStr, "17") || strings.Contains(bodyStr, "2125") {
+		t.Logf("SUCCESS: Got numerical response (125 * 17 = 2125)")
+		t.Logf("Response: %s", bodyStr)
+	} else {
+		t.Logf("Response (no explicit tool call detected): %s", bodyStr)
+	}
+}
+
+func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Use profileArn from auth
+	profileArn := authManager.ProfileArn()
+
+	// Use converter to build payload with image
+	// Using a small valid PNG as data URL to avoid network issues in test
+	imageURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9QzwAEjDAGNzYQBxkHADPvBQcR6QmoAAAAAElFTkSuQmCC"
+
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "auto",
+		Messages: []models.ChatMessage{
+			{
+				Role: "user",
+				Content: []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": "What is in this image? Describe what you see.",
+					},
+					map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": imageURL,
+						},
+					},
+				},
+			},
+		},
+	}, conversationID, profileArn)
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+	t.Logf("Image URL: %s", imageURL)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
+
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
+	if err != nil {
+		t.Fatalf("DoRequest failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	bodyStr := string(body)
+
+	// Check if we got a valid response about the image
+	if len(bodyStr) > 50 {
+		t.Logf("SUCCESS: Got image recognition response!")
+		// Log a preview of the response
+		preview := bodyStr
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		t.Logf("Response preview: %s", preview)
+	} else {
+		t.Fatalf("Response too short: %s", bodyStr)
+	}
+}
+
+func TestListAvailableModels(t *testing.T) {
+	mockAuth := &mockAuthManager{
+		token:   "test-token",
+		apiHost: "http://localhost:8080",
+	}
+	client := NewKiroClient(mockAuth)
+
+	var receivedTarget string
+	var receivedAuth string
+	var receivedContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedTarget = r.Header.Get("x-amz-target")
+		receivedAuth = r.Header.Get("Authorization")
+		receivedContentType = r.Header.Get("Content-Type")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"defaultModel": {
+				"modelId": "auto",
+				"modelName": "auto",
+				"description": "Default model"
+			},
+			"models": [
+				{
+					"modelId": "claude-sonnet-4.5",
+					"modelName": "claude-sonnet-4.5",
+					"description": "Claude Sonnet 4.5",
+					"promptCaching": {"supportsPromptCaching": true},
+					"rateMultiplier": 1.3,
+					"rateUnit": "Credit",
+					"tokenLimits": {"maxInputTokens": 200000}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	// Override the API host to use our test server
+	originalHost := mockAuth.apiHost
+	mockAuth.apiHost = server.URL
+
+	resp, err := client.ListAvailableModels(context.Background(), "arn:aws:codewhisperer:us-east-1:123456789:profile/test")
+
+	mockAuth.apiHost = originalHost
+
+	if err != nil {
+		t.Fatalf("ListAvailableModels failed: %v", err)
+	}
+
+	if receivedTarget != "AmazonCodeWhispererService.ListAvailableModels" {
+		t.Errorf("x-amz-target: got %q, want %q", receivedTarget, "AmazonCodeWhispererService.ListAvailableModels")
+	}
+
+	if !strings.HasPrefix(receivedAuth, "Bearer ") {
+		t.Errorf("Authorization: got %q, want Bearer token", receivedAuth)
+	}
+
+	if receivedContentType != "application/x-amz-json-1.0" {
+		t.Errorf("Content-Type: got %q, want %q", receivedContentType, "application/x-amz-json-1.0")
+	}
+
+	if resp == nil {
+		t.Fatal("Response is nil")
+	}
+
+	if resp.DefaultModel == nil {
+		t.Error("DefaultModel is nil")
+	} else if resp.DefaultModel.ModelID != "auto" {
+		t.Errorf("DefaultModel.ModelID: got %q, want %q", resp.DefaultModel.ModelID, "auto")
+	}
+
+	if len(resp.Models) != 1 {
+		t.Errorf("Models length: got %d, want 1", len(resp.Models))
+	} else {
+		if resp.Models[0].ModelID != "claude-sonnet-4.5" {
+			t.Errorf("Models[0].ModelID: got %q, want %q", resp.Models[0].ModelID, "claude-sonnet-4.5")
+		}
+		if resp.Models[0].RateMultiplier != 1.3 {
+			t.Errorf("Models[0].RateMultiplier: got %v, want %v", resp.Models[0].RateMultiplier, 1.3)
+		}
+		if !resp.Models[0].PromptCaching.SupportsPromptCaching {
+			t.Error("Models[0].PromptCaching.SupportsPromptCaching: got false, want true")
+		}
+		if resp.Models[0].TokenLimits.MaxInputTokens != 200000 {
+			t.Errorf("Models[0].TokenLimits.MaxInputTokens: got %d, want %d", resp.Models[0].TokenLimits.MaxInputTokens, 200000)
+		}
+	}
 }

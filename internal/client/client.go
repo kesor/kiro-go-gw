@@ -66,11 +66,11 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 		}
 
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-		req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-		req.Header.Set("x-amzn-codewhisperer-optout", "true")
-		req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+		req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+		req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+		req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
+		req.Header.Set("x-amzn-codewhisperer-optout", "false")
+		req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
 		// Use streaming client for streaming requests
 		client := c.httpClient
@@ -148,4 +148,82 @@ func isRetryableError(err error) bool {
 func (c *KiroClient) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
+}
+
+type ListModelsResponse struct {
+	DefaultModel *ModelInfo  `json:"defaultModel"`
+	Models       []ModelInfo `json:"models"`
+}
+
+type ModelInfo struct {
+	Type                string         `json:"__type"`
+	ModelID             string         `json:"modelId"`
+	ModelName           string         `json:"modelName"`
+	Description         string         `json:"description"`
+	PromptCaching       *PromptCaching `json:"promptCaching"`
+	RateMultiplier      float64        `json:"rateMultiplier"`
+	RateUnit            string         `json:"rateUnit"`
+	SupportedInputTypes []string       `json:"supportedInputTypes"`
+	TokenLimits         *TokenLimits   `json:"tokenLimits"`
+}
+
+type PromptCaching struct {
+	MaximumCacheCheckpointsPerRequest int  `json:"maximumCacheCheckpointsPerRequest"`
+	MinimumTokensPerCacheCheckpoint   int  `json:"minimumTokensPerCacheCheckpoint"`
+	SupportsPromptCaching             bool `json:"supportsPromptCaching"`
+}
+
+type TokenLimits struct {
+	MaxInputTokens int `json:"maxInputTokens"`
+}
+
+func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string) (*ListModelsResponse, error) {
+	apiHost := c.authManager.APIHost()
+	origin := "KIRO_CLI"
+	endpoint := fmt.Sprintf("%s/", apiHost)
+
+	payload := map[string]string{
+		"origin":     origin,
+		"profileArn": profileArn,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	token, err := c.authManager.GetAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererService.ListAvailableModels")
+	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererruntime/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererruntime/0.1.13922 os/linux lang/rust/1.92.0 m/F,C app/AmazonQ-For-CLI")
+	req.Header.Set("x-amzn-codewhisperer-optout", "false")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ListAvailableModels failed: %s", body)
+	}
+
+	var result ListModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
 }

@@ -108,16 +108,43 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simplified model list - in production would fetch from Kiro API
-	modelList := []models.Model{
-		{ID: "auto", Object: "model", OwnedBy: "kiro"},
-		{ID: "claude-sonnet-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-haiku-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-opus-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-sonnet-4", Object: "model", OwnedBy: "anthropic"},
-		{ID: "deepseek-v3.2", Object: "model", OwnedBy: "deepseek"},
-		{ID: "mini-max-m2.1", Object: "model", OwnedBy: "minimax"},
-		{ID: "qwen3-coder-next", Object: "model", OwnedBy: "qwen"},
+	if err := s.verifyAPIKey(r); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	profileArn := s.authMgr.ProfileArn()
+
+	kiroModels, err := s.kiroClient.ListAvailableModels(r.Context(), profileArn)
+	if err != nil {
+		log.Printf("Failed to fetch models from Kiro API: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to fetch models: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	modelList := make([]models.Model, 0, len(kiroModels.Models))
+	for _, m := range kiroModels.Models {
+		maxInputTokens := 0
+		if m.TokenLimits != nil {
+			maxInputTokens = m.TokenLimits.MaxInputTokens
+		}
+		supportsPromptCaching := false
+		if m.PromptCaching != nil {
+			supportsPromptCaching = m.PromptCaching.SupportsPromptCaching
+		}
+		ownedBy := deriveProvider(m.ModelID)
+		modelList = append(modelList, models.Model{
+			ID:                    m.ModelID,
+			Object:                "model",
+			Created:               0,
+			OwnedBy:               ownedBy,
+			Permission:            nil,
+			Description:           m.Description,
+			RateMultiplier:        m.RateMultiplier,
+			RateUnit:              m.RateUnit,
+			MaxInputTokens:        maxInputTokens,
+			SupportsPromptCaching: supportsPromptCaching,
+		})
 	}
 
 	json.NewEncoder(w).Encode(models.ModelList{
@@ -301,4 +328,21 @@ func Run() {
 	}
 
 	log.Println("Server exited")
+}
+
+func deriveProvider(modelID string) string {
+	switch {
+	case strings.HasPrefix(modelID, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(modelID, "deepseek-"):
+		return "deepseek"
+	case strings.HasPrefix(modelID, "qwen-"):
+		return "qwen"
+	case strings.HasPrefix(modelID, "mini-max-"):
+		return "minimax"
+	case modelID == "auto":
+		return "kiro"
+	default:
+		return "kiro"
+	}
 }

@@ -1,37 +1,122 @@
 package converter
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 
 	"kiro-go-gw/internal/models"
 )
 
 func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profileArn string) (map[string]interface{}, error) {
-	systemPrompt, messages := convertMessages(req.Messages)
+	systemPrompt, _ := convertMessages(req.Messages)
 	tools := convertTools(req.Tools)
 
-	// Determine profileArn for payload
-	profileArnForPayload := ""
-	if profileArn != "" {
-		profileArnForPayload = profileArn
+	// Find the last user message for currentMessage
+	var lastUserMsgIndex int = -1
+	var lastNonSystemIndex int = -1
+
+	// Find the last non-system message index
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "system" {
+			lastNonSystemIndex = i
+			break
+		}
 	}
 
-	payload := map[string]interface{}{
+	// Find the last user message for currentMessage
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			lastUserMsgIndex = i
+			break
+		}
+	}
+
+	// If no user message found or no content blocks, error
+	if lastUserMsgIndex < 0 {
+		return nil, fmt.Errorf("no user message found in request")
+	}
+
+	// Validate that the last non-system message is not a tool message
+	// Tool results cannot be represented as userInputMessage
+	if lastNonSystemIndex >= 0 && lastUserMsgIndex != lastNonSystemIndex {
+		lastMsgRole := req.Messages[lastNonSystemIndex].Role
+		if lastMsgRole == "tool" {
+			return nil, fmt.Errorf("last message cannot be tool result, expected user or assistant message")
+		}
+	}
+
+	// Build history from all messages EXCEPT the last user message
+	var history []map[string]interface{}
+	if lastUserMsgIndex > 0 {
+		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
+	}
+	if lastUserMsgIndex < len(req.Messages)-1 {
+		_, afterUserMsgs := convertMessages(req.Messages[lastUserMsgIndex+1:])
+		history = append(history, afterUserMsgs...)
+	}
+
+	// Extract text content and images from the last user message
+	userTextContent := extractTextContent(req.Messages[lastUserMsgIndex].Content)
+	userImages := extractImages(req.Messages[lastUserMsgIndex].Content)
+
+	// Get envState
+	envState := getEnvState()
+
+	// Build userInputMessageContext with envState
+	userInputMessageContext := map[string]interface{}{
+		"envState": envState,
+	}
+
+	// Add tools to userInputMessageContext
+	if tools != nil {
+		userInputMessageContext["tools"] = tools
+	}
+
+	// Build userInputMessage (following Kiro format)
+	userInputMessage := map[string]interface{}{
+		"content":                 userTextContent,
+		"modelId":                 normalizeModelName(req.Model),
+		"origin":                  "KIRO_CLI",
+		"userInputMessageContext": userInputMessageContext,
+	}
+
+	// Add images if present (separate field)
+	if len(userImages) > 0 {
+		userInputMessage["images"] = userImages
+	}
+
+	// Build conversationState structure (Kiro's native format)
+	conversationState := map[string]interface{}{
+		"chatTriggerType": "MANUAL",
 		"conversationId":  conversationID,
-		"messages":        messages,
-		"profileArn":      profileArnForPayload,
-		"modelId":         normalizeModelName(req.Model),
-		"enableStreaming": req.Stream,
+		"currentMessage": map[string]interface{}{
+			"userInputMessage": userInputMessage,
+		},
+	}
+
+	// Add history if there are previous messages
+	if len(history) > 0 {
+		conversationState["history"] = history
+	}
+
+	// Build payload
+	payload := map[string]interface{}{
+		"conversationState": conversationState,
+	}
+
+	// Add profileArn only if provided (not needed for AWS SSO)
+	if profileArn != "" {
+		payload["profileArn"] = profileArn
 	}
 
 	if systemPrompt != "" {
 		payload["systemPrompt"] = systemPrompt
-	}
-
-	if tools != nil {
-		payload["toolDefinitions"] = tools
 	}
 
 	if req.MaxTokens > 0 {
@@ -42,7 +127,51 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		payload["temperature"] = req.Temperature
 	}
 
+	if req.TopP > 0 {
+		payload["topP"] = req.TopP
+	}
+
+	if req.Stream {
+		payload["enableStreaming"] = true
+	}
+
 	return payload, nil
+}
+
+func getEnvState() map[string]interface{} {
+	osName := "linux"
+	cwd := "/home/user"
+	if IsExecEnv() {
+		if actualCwd, err := os.Getwd(); err == nil {
+			cwd = actualCwd
+		}
+	}
+	return map[string]interface{}{
+		"operatingSystem":         osName,
+		"currentWorkingDirectory": cwd,
+	}
+}
+
+func IsExecEnv() bool {
+	return true
+}
+
+func generateAgentContinuationId() string {
+	// Generate a UUID-like string for agentContinuationId
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		randHex(8), randHex(4), randHex(4), randHex(4), randHex(12))
+}
+
+func randHex(n int) string {
+	hexChars := "0123456789abcdef"
+	result := make([]byte, n)
+	if _, err := rand.Read(result); err != nil {
+		return ""
+	}
+	for i := 0; i < n; i++ {
+		result[i] = hexChars[result[i]%16]
+	}
+	return string(result)
 }
 
 func normalizeModelName(name string) string {
@@ -88,6 +217,7 @@ func normalizeModelName(name string) string {
 func convertMessages(msgs []models.ChatMessage) (string, []map[string]interface{}) {
 	var systemPrompt strings.Builder
 	var converted []map[string]interface{}
+	envState := getEnvState()
 
 	for _, msg := range msgs {
 		if msg.Role == "system" {
@@ -101,58 +231,96 @@ func convertMessages(msgs []models.ChatMessage) (string, []map[string]interface{
 			continue
 		}
 
-		convertedMsg := map[string]interface{}{
-			"role": msg.Role,
-		}
-
-		// Handle content
+		// Build Kiro format: userInputMessage or assistantResponseMessage
+		var convertedMsg map[string]interface{}
 		content := extractTextContent(msg.Content)
-		if content != "" {
-			convertedMsg["content"] = []map[string]interface{}{
-				{"type": "text", "text": content},
+
+		if msg.Role == "user" || msg.Role == "tool" {
+			// Both user and tool messages become userInputMessage in Kiro format
+			// Tool results are embedded in userInputMessageContext
+			userInputMsg := map[string]interface{}{
+				"content": content,
+				"origin":  "KIRO_CLI",
 			}
-		} else {
-			convertedMsg["content"] = []map[string]interface{}{}
+
+			// Add envState
+			userInputMsgContext := map[string]interface{}{
+				"envState": envState,
+			}
+
+			// Handle tool results (for both tool role messages and user messages with tool results)
+			toolResults := buildToolResults(msg)
+			if len(toolResults) > 0 {
+				userInputMsgContext["toolResults"] = toolResults
+			}
+
+			userInputMsg["userInputMessageContext"] = userInputMsgContext
+
+			// Handle images in user message
+			images := extractImages(msg.Content)
+			if len(images) > 0 {
+				userInputMsg["images"] = images
+			}
+
+			convertedMsg = map[string]interface{}{
+				"userInputMessage": userInputMsg,
+			}
+		} else if msg.Role == "assistant" {
+			assistantMsg := map[string]interface{}{
+				"content": content,
+			}
+
+			// Add messageId if available
+			if msg.Name != "" {
+				assistantMsg["messageId"] = msg.Name
+			}
+
+			// Handle tool calls
+			if len(msg.ToolCalls) > 0 {
+				toolUses := make([]map[string]interface{}, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					toolUses = append(toolUses, map[string]interface{}{
+						"toolUseId": tc.ID,
+						"name":      tc.Function.Name,
+						"input":     parseArguments(tc.Function.Arguments),
+					})
+				}
+				assistantMsg["toolUses"] = toolUses
+			}
+
+			convertedMsg = map[string]interface{}{
+				"assistantResponseMessage": assistantMsg,
+			}
 		}
 
-		// Handle tool calls (assistant message with tool_calls)
-		if len(msg.ToolCalls) > 0 {
-			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
-				toolCalls = append(toolCalls, map[string]interface{}{
-					"type":  "toolUse",
-					"id":    tc.ID,
-					"name":  tc.Function.Name,
-					"input": parseArguments(tc.Function.Arguments),
-				})
-			}
-			convertedMsg["toolCalls"] = toolCalls
+		if convertedMsg != nil {
+			converted = append(converted, convertedMsg)
 		}
-
-		// Handle tool results (tool role)
-		if msg.Role == "tool" {
-			toolUseID := msg.ToolCallID
-			if toolUseID == "" {
-				toolUseID = msg.Name // Fallback to name
-			}
-			convertedMsg["toolUseId"] = toolUseID
-			convertedMsg["content"] = []map[string]interface{}{
-				{"type": "toolResult", "toolUseId": toolUseID, "content": content},
-			}
-		}
-
-		// Handle images in content
-		images := extractImages(msg.Content)
-		if len(images) > 0 {
-			contentBlocks := convertedMsg["content"].([]map[string]interface{})
-			contentBlocks = append(contentBlocks, images...)
-			convertedMsg["content"] = contentBlocks
-		}
-
-		converted = append(converted, convertedMsg)
 	}
 
 	return systemPrompt.String(), converted
+}
+
+func buildToolResults(msg models.ChatMessage) []map[string]interface{} {
+	var results []map[string]interface{}
+
+	// Handle tool results from tool role messages
+	if msg.Role == "tool" {
+		toolUseID := msg.ToolCallID
+		if toolUseID == "" {
+			toolUseID = msg.Name
+		}
+		content := extractTextContent(msg.Content)
+		results = append(results, map[string]interface{}{
+			"toolUseId": toolUseID,
+			"content": []map[string]interface{}{
+				{"text": content},
+			},
+			"status": "success",
+		})
+	}
+
+	return results
 }
 
 func convertTools(tools []models.Tool) []map[string]interface{} {
@@ -185,11 +353,16 @@ func convertTools(tools []models.Tool) []map[string]interface{} {
 			continue
 		}
 
+		// Wrap inputSchema in {"json": ...} as per Kiro format
+		wrappedSchema := map[string]interface{}{
+			"json": inputSchema,
+		}
+
 		result = append(result, map[string]interface{}{
-			"toolSpec": map[string]interface{}{
+			"toolSpecification": map[string]interface{}{
 				"name":        name,
 				"description": description,
-				"inputSchema": inputSchema,
+				"inputSchema": wrappedSchema,
 			},
 		})
 	}
@@ -224,23 +397,37 @@ func extractTextContent(content interface{}) string {
 	}
 }
 
-func extractImages(content interface{}) []map[string]interface{} {
+func extractContentBlocks(content interface{}) []map[string]interface{} {
 	if content == nil {
 		return nil
 	}
 
-	var images []map[string]interface{}
+	var blocks []map[string]interface{}
 
 	switch v := content.(type) {
+	case string:
+		if v != "" {
+			blocks = append(blocks, map[string]interface{}{
+				"type": "text",
+				"text": v,
+			})
+		}
 	case []interface{}:
 		for _, item := range v {
 			if block, ok := item.(map[string]interface{}); ok {
-				if block["type"] == "image_url" {
+				blockType, _ := block["type"].(string)
+				if blockType == "text" {
+					if text, ok := block["text"].(string); ok && text != "" {
+						blocks = append(blocks, map[string]interface{}{
+							"type": "text",
+							"text": text,
+						})
+					}
+				} else if blockType == "image_url" {
 					if imgURL, ok := block["image_url"].(map[string]interface{}); ok {
 						if url, ok := imgURL["url"].(string); ok {
-							// Handle data URL
 							if strings.HasPrefix(url, "data:image") {
-								images = append(images, map[string]interface{}{
+								blocks = append(blocks, map[string]interface{}{
 									"type": "image",
 									"source": map[string]interface{}{
 										"type":      "base64",
@@ -249,7 +436,7 @@ func extractImages(content interface{}) []map[string]interface{} {
 									},
 								})
 							} else {
-								images = append(images, map[string]interface{}{
+								blocks = append(blocks, map[string]interface{}{
 									"type": "image",
 									"source": map[string]interface{}{
 										"type": "url",
@@ -264,7 +451,103 @@ func extractImages(content interface{}) []map[string]interface{} {
 		}
 	}
 
+	return blocks
+}
+
+func extractImages(content interface{}) []map[string]interface{} {
+	if content == nil {
+		return nil
+	}
+
+	var images []map[string]interface{}
+
+	switch v := content.(type) {
+	case []interface{}:
+		for _, item := range v {
+			if block, ok := item.(map[string]interface{}); ok {
+				if block["type"] == "image_url" {
+					if imgURL, ok := block["image_url"].(map[string]interface{}); ok {
+						if url, ok := imgURL["url"].(string); ok {
+							// Handle data URL (already base64 encoded)
+							if strings.HasPrefix(url, "data:image") {
+								mediaType := extractMediaType(url)
+								format := strings.TrimPrefix(mediaType, "image/")
+								images = append(images, map[string]interface{}{
+									"format": format,
+									"source": map[string]interface{}{
+										"bytes": extractBase64Data(url),
+									},
+								})
+							} else {
+								// Try to fetch URL and convert to base64
+								if data, err := fetchImageAsBase64(url); err == nil {
+									format := detectImageFormat(data)
+									images = append(images, map[string]interface{}{
+										"format": format,
+										"source": map[string]interface{}{
+											"bytes": data,
+										},
+									})
+								} else {
+									// Fallback: include as URL reference (legacy format)
+									images = append(images, map[string]interface{}{
+										"format": "png",
+										"source": map[string]interface{}{
+											"url": url,
+										},
+									})
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return images
+}
+
+func fetchImageAsBase64(imageURL string) (string, error) {
+	resp, err := http.Get(imageURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch image: %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+func detectImageFormat(data string) string {
+	// Simple format detection based on base64 header
+	decoded, err := base64.StdEncoding.DecodeString(data[:100])
+	if err != nil {
+		return "png"
+	}
+	if len(decoded) >= 4 {
+		if decoded[0] == 0xFF && decoded[1] == 0xD8 {
+			return "jpeg"
+		}
+		if decoded[0] == 0x89 && string(decoded[:4]) == "PNG" {
+			return "png"
+		}
+		if decoded[0] == 0x47 && decoded[1] == 0x49 {
+			return "gif"
+		}
+		if decoded[0] == 0x52 && string(decoded[:4]) == "RIFF" {
+			return "webp"
+		}
+	}
+	return "png"
 }
 
 func extractMediaType(dataURL string) string {
