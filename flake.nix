@@ -18,15 +18,9 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
-        packages.kiro-go-gw = pkgs.buildGoModule {
-          pname = "kiro-go-gw";
-          version = "0.1.0";
+        packages.kiro-go-gw = pkgs.callPackage ./package.nix {
           src = self;
-          vendorHash = pkgs.lib.fakeHash;
-          subPackages = [ "cmd/server" ];
-          buildInputs = [ pkgs.sqlite ];
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          CGO_ENABLED = "1";
+          vendorHash = "sha256-q9BCDpLndmvFq67BZEyA8i4q/gyDwiTa7+Sz3JlrnQM="; # pkgs.lib.fakeHash;
         };
 
         packages.default = self.packages.${system}.kiro-go-gw;
