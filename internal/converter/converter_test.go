@@ -2,6 +2,7 @@ package converter
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"kiro-go-gw/internal/models"
@@ -913,7 +914,8 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 					map[string]interface{}{
 						"type": "image_url",
 						"image_url": map[string]interface{}{
-							"url": "https://example.com/image.png",
+							// Use data URL to avoid network fetch in test
+							"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9QzwAEjDAGNzYQBxkHADPvBQcR6QmoAAAAAElFTkSuQmCC",
 						},
 					},
 				},
@@ -930,37 +932,22 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 	currentMsg := convState["currentMessage"].(map[string]interface{})
 	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
 
-	// Content is now a string
+	// Content should include image data reference
 	content, ok := userInputMsg["content"].(string)
 	if !ok {
 		t.Fatal("content is not a string")
 	}
-	if content != "What's in this image?" {
-		t.Errorf("content: got %q, want %q", content, "What's in this image?")
+	// For data URLs, we add "[Image data included]" as reference
+	if !strings.Contains(content, "Image data included") {
+		t.Errorf("content should contain image data reference, got %q", content)
+	}
+	if !strings.Contains(content, "What's in this image?") {
+		t.Errorf("content should contain original text, got %q", content)
 	}
 
-	// Images should be in separate "images" field
-	images, ok := userInputMsg["images"].([]map[string]interface{})
-	if !ok {
-		t.Fatal("images not found in userInputMessage")
-	}
-
-	if len(images) != 1 {
-		t.Fatalf("expected 1 image, got %d", len(images))
-	}
-
-	imageBlock := images[0]
-	// New format uses "format" instead of "type"
-	if imageBlock["format"] != "png" {
-		t.Errorf("image format: got %v, want png", imageBlock["format"])
-	}
-	source, ok := imageBlock["source"].(map[string]interface{})
-	if !ok {
-		t.Fatal("image source not found")
-	}
-	// New format uses "bytes" or "url"
-	if source["url"] != "https://example.com/image.png" {
-		t.Errorf("image url: got %v", source["url"])
+	// Kiro handles images via fs_read tool - no images field in request
+	if _, hasImages := userInputMsg["images"]; hasImages {
+		t.Error("images field should not be present - Kiro handles images via fs_read tool")
 	}
 }
 
@@ -1164,4 +1151,195 @@ func TestBuildKiroPayload_EmptyHistory(t *testing.T) {
 			t.Errorf("history should be empty for single message, got %d", len(history))
 		}
 	}
+}
+
+func TestBuildKiroPayload_WebSearchTool(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Search for Go programming"},
+		},
+		Tools: []models.Tool{
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "web_search",
+					Description: "Search the web for information",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"query": map[string]string{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	ctx := userInputMsg["userInputMessageContext"].(map[string]interface{})
+	tools := ctx["tools"].([]map[string]interface{})
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	toolSpec := tools[0]["toolSpecification"].(map[string]interface{})
+	if toolSpec["name"] != "web_search" {
+		t.Errorf("tool name: got %v, want web_search", toolSpec["name"])
+	}
+
+	// Verify inputSchema is wrapped as { "json": ... }
+	inputSchema, ok := toolSpec["inputSchema"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema not found in toolSpecification")
+	}
+	jsonWrapper, ok := inputSchema["json"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema should be wrapped in { json: ... }")
+	}
+	if jsonWrapper["type"] != "object" {
+		t.Errorf("inputSchema type: got %v, want object", jsonWrapper["type"])
+	}
+}
+
+func TestBuildKiroPayload_WebFetchTool(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Fetch this URL"},
+		},
+		Tools: []models.Tool{
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "web_fetch",
+					Description: "Fetch content from a URL",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"url": map[string]string{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	ctx := userInputMsg["userInputMessageContext"].(map[string]interface{})
+	tools := ctx["tools"].([]map[string]interface{})
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	toolSpec := tools[0]["toolSpecification"].(map[string]interface{})
+	if toolSpec["name"] != "web_fetch" {
+		t.Errorf("tool name: got %v, want web_fetch", toolSpec["name"])
+	}
+
+	// Verify inputSchema is wrapped as { "json": ... }
+	inputSchema, ok := toolSpec["inputSchema"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema not found in toolSpecification")
+	}
+	jsonWrapper, ok := inputSchema["json"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema should be wrapped in { json: ... }")
+	}
+	if jsonWrapper["type"] != "object" {
+		t.Errorf("inputSchema type: got %v, want object", jsonWrapper["type"])
+	}
+}
+
+func TestBuildKiroPayload_MultipleToolsIncludingWeb(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Use tools to help me"},
+		},
+		Tools: []models.Tool{
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "web_search",
+					Description: "Search the web",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"query": map[string]string{"type": "string"},
+						},
+					},
+				},
+			},
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "calculator",
+					Description: "Perform calculations",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"expression": map[string]string{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	ctx := userInputMsg["userInputMessageContext"].(map[string]interface{})
+	tools := ctx["tools"].([]map[string]interface{})
+
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(tools))
+	}
+
+	toolNames := make([]string, len(tools))
+	for i, tool := range tools {
+		toolSpec := tool["toolSpecification"].(map[string]interface{})
+		toolNames[i] = toolSpec["name"].(string)
+	}
+
+	if !contains(toolNames, "web_search") {
+		t.Error("web_search tool not found")
+	}
+	if !contains(toolNames, "calculator") {
+		t.Error("calculator tool not found")
+	}
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
