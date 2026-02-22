@@ -242,15 +242,22 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 
 		// Use AWS event stream decoder
 		decoder := eventstream.NewDecoder()
-		payloadBuf := make([]byte, 0, 1024)
+		payloadBuf := make([]byte, 0, 64*1024) // 64KB buffer for large payloads
+		errorCount := 0
+		maxErrors := 10
 
 		for {
 			msg, err := decoder.Decode(reader, payloadBuf)
 			if err == io.EOF {
 				ch <- "data: [DONE]\n\n"
-				break
+				return
 			}
 			if err != nil {
+				errorCount++
+				if errorCount > maxErrors {
+					ch <- fmt.Sprintf(`data: {"error":"stream decode error limit exceeded: %v"}`+"\n\n", err)
+					return
+				}
 				continue
 			}
 
@@ -319,7 +326,9 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 
 	// Use AWS event stream decoder
 	decoder := eventstream.NewDecoder()
-	payloadBuf := make([]byte, 0, 1024)
+	payloadBuf := make([]byte, 0, 64*1024) // 64KB buffer for large payloads
+	errorCount := 0
+	maxErrors := 10
 
 	for {
 		msg, err := decoder.Decode(reader, payloadBuf)
@@ -330,7 +339,10 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 			break
 		}
 		if err != nil {
-			// If it's not an EOF, try to continue
+			errorCount++
+			if errorCount > maxErrors {
+				return nil, fmt.Errorf("stream decode error limit exceeded: %w", err)
+			}
 			continue
 		}
 
@@ -378,7 +390,10 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 				if input, ok := payload["input"].(string); ok {
 					inputStr = input
 				} else if inputMap, ok := payload["input"].(map[string]interface{}); ok {
-					inputBytes, _ := json.Marshal(inputMap)
+					inputBytes, err := json.Marshal(inputMap)
+					if err != nil {
+						continue // Skip tool call if marshaling fails
+					}
 					inputStr = string(inputBytes)
 				}
 				toolCalls = append(toolCalls, models.ToolCall{
@@ -425,7 +440,10 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 }
 
 func escapeJSON(s string) string {
-	b, _ := json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return `""` // Return empty quoted string on error (should be rare for valid UTF-8)
+	}
 	return string(b)
 }
 
