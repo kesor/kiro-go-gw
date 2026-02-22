@@ -468,6 +468,10 @@ func TestTokenDataStruct(t *testing.T) {
 }
 
 func TestAuthManagerWithRealCredentials(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
 	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
 	if dbPath == "" {
 		home, err := os.UserHomeDir()
@@ -513,7 +517,7 @@ func TestAuthManagerWithRealCredentials(t *testing.T) {
 		t.Fatal("Got empty access token")
 	}
 
-	t.Logf("Got access token: %s...", token[:min(20, len(token))])
+	t.Logf("Got access token, length: %d", len(token))
 
 	if am.isTokenExpired() {
 		t.Error("Token should not be expired after GetAccessToken")
@@ -540,8 +544,13 @@ func TestRefreshTokenKiroDesktop_Success(t *testing.T) {
 		}
 
 		var payload map[string]string
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &payload)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("failed to unmarshal request body as JSON: %v", err)
+		}
 
 		if payload["refreshToken"] != "test-refresh-token" {
 			t.Errorf("Expected refreshToken 'test-refresh-token', got %s", payload["refreshToken"])
@@ -622,8 +631,13 @@ func TestRefreshTokenAWSSSO_Success(t *testing.T) {
 		}
 
 		var payload map[string]string
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &payload)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("failed to unmarshal request body: %v", err)
+		}
 
 		if payload["grantType"] != "refresh_token" {
 			t.Errorf("Expected grantType 'refresh_token', got %s", payload["grantType"])

@@ -338,6 +338,10 @@ func TestDoRequest_NonStreamingSingleRetry(t *testing.T) {
 }
 
 func TestKiroClientWithRealCredentials(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
 	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
 	if dbPath == "" {
 		home, err := os.UserHomeDir()
@@ -380,7 +384,7 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccessToken failed: %v", err)
 	}
-	t.Logf("Got access token: %s...", token[:min(20, len(token))])
+	t.Logf("Got access token, length: %d", len(token))
 
 	// Make a direct HTTP request to see the actual response
 	chatURL := authManager.APIHost() + "/generateAssistantResponse"
@@ -402,8 +406,14 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 		},
 	}
 
-	jsonData, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
@@ -418,7 +428,10 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
 	t.Logf("Response status: %d", resp.StatusCode)
 
 	// Check if it's a streaming response (SSE format)
