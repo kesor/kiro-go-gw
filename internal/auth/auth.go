@@ -15,6 +15,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"kiro-go-gw/internal/debug"
 )
 
 // AuthProvider defines the interface for authentication.
@@ -335,28 +337,55 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	debug.LogAuth("refresh_initiated", "Token refresh initiated via Kiro Desktop Auth", "", map[string]string{
+		"authType": "kiro_desktop",
+		"url":      refreshURL,
+	})
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		errMsg := fmt.Errorf("failed to refresh token: %w", err).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via Kiro Desktop Auth", errMsg, map[string]string{
+			"authType": "kiro_desktop",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("failed to refresh token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		errMsg := fmt.Errorf("token refresh failed with status: %d, body: %s", resp.StatusCode, string(body)).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via Kiro Desktop Auth", errMsg, map[string]string{
+			"authType":   "kiro_desktop",
+			"url":        refreshURL,
+			"statusCode": fmt.Sprintf("%d", resp.StatusCode),
+		})
 		return fmt.Errorf("token refresh failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		errMsg := fmt.Errorf("failed to decode refresh response: %w", err).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via Kiro Desktop Auth", errMsg, map[string]string{
+			"authType": "kiro_desktop",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("failed to decode refresh response: %w", err)
 	}
 
 	accessToken, ok := result["accessToken"].(string)
 	if !ok || accessToken == "" {
+		errMsg := "response does not contain accessToken"
+		debug.LogAuth("refresh_failed", "Token refresh failed via Kiro Desktop Auth", errMsg, map[string]string{
+			"authType": "kiro_desktop",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("response does not contain accessToken")
 	}
 
+	oldRefreshToken := am.refreshToken
 	am.accessToken = accessToken
 	if refreshToken, ok := result["refreshToken"].(string); ok && refreshToken != "" {
 		am.refreshToken = refreshToken
@@ -368,7 +397,16 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 		am.profileArn = profileArn
 	}
 
+	meta := map[string]string{
+		"authType":  "kiro_desktop",
+		"expiresAt": am.expiresAt.Format(time.RFC3339),
+	}
+	if oldRefreshToken != am.refreshToken {
+		meta["tokenRotated"] = "true"
+	}
+
 	log.Printf("Token refreshed via Kiro Desktop Auth, expires: %v", am.expiresAt)
+	debug.LogAuth("refresh_success", "Token refreshed via Kiro Desktop Auth", "", meta)
 
 	return nil
 }
@@ -417,28 +455,56 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 	}
 	log.Printf("Refreshing token via AWS SSO OIDC: url=%s, clientId=%s...", refreshURL, clientIDLog)
 
+	debug.LogAuth("refresh_initiated", "Token refresh initiated via AWS SSO OIDC", "", map[string]string{
+		"authType": "aws_sso",
+		"url":      refreshURL,
+		"clientId": clientIDLog + "...",
+	})
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		errMsg := fmt.Errorf("failed to refresh AWS SSO token: %w", err).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via AWS SSO OIDC", errMsg, map[string]string{
+			"authType": "aws_sso",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("failed to refresh AWS SSO token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		errMsg := fmt.Errorf("AWS SSO token refresh failed with status: %d, body: %s", resp.StatusCode, string(body)).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via AWS SSO OIDC", errMsg, map[string]string{
+			"authType":   "aws_sso",
+			"url":        refreshURL,
+			"statusCode": fmt.Sprintf("%d", resp.StatusCode),
+		})
 		return fmt.Errorf("AWS SSO token refresh failed with status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		errMsg := fmt.Errorf("failed to decode refresh response: %w", err).Error()
+		debug.LogAuth("refresh_failed", "Token refresh failed via AWS SSO OIDC", errMsg, map[string]string{
+			"authType": "aws_sso",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("failed to decode refresh response: %w", err)
 	}
 
 	accessToken, ok := result["accessToken"].(string)
 	if !ok || accessToken == "" {
+		errMsg := fmt.Sprintf("response does not contain accessToken: %+v", result)
+		debug.LogAuth("refresh_failed", "Token refresh failed via AWS SSO OIDC", errMsg, map[string]string{
+			"authType": "aws_sso",
+			"url":      refreshURL,
+		})
 		return fmt.Errorf("response does not contain accessToken: %+v", result)
 	}
 
+	oldRefreshToken := am.refreshToken
 	am.accessToken = accessToken
 	if refreshToken, ok := result["refreshToken"].(string); ok && refreshToken != "" {
 		am.refreshToken = refreshToken
@@ -447,7 +513,16 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 		am.expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second).Add(-60 * time.Second)
 	}
 
+	meta := map[string]string{
+		"authType":  "aws_sso",
+		"expiresAt": am.expiresAt.Format(time.RFC3339),
+	}
+	if oldRefreshToken != am.refreshToken {
+		meta["tokenRotated"] = "true"
+	}
+
 	log.Printf("Token refreshed via AWS SSO OIDC, expires: %v", am.expiresAt)
+	debug.LogAuth("refresh_success", "Token refreshed via AWS SSO OIDC", "", meta)
 
 	return nil
 }
