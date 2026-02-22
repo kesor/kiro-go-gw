@@ -3,6 +3,7 @@ package converter
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"kiro-go-gw/internal/models"
@@ -13,7 +14,6 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	tools := convertTools(req.Tools)
 
 	// Find the last user message for currentMessage
-	var userContentBlocks []map[string]interface{}
 	var lastUserMsgIndex int = -1
 	var lastNonSystemIndex int = -1
 
@@ -28,20 +28,18 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	// Find the last user message for currentMessage
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
-			userContentBlocks = extractContentBlocks(req.Messages[i].Content)
 			lastUserMsgIndex = i
 			break
 		}
 	}
 
 	// If no user message found or no content blocks, error
-	if len(userContentBlocks) == 0 {
+	if lastUserMsgIndex < 0 {
 		return nil, fmt.Errorf("no user message found in request")
 	}
 
 	// Validate that the last non-system message is not a tool message
 	// Tool results cannot be represented as userInputMessage
-	// Allow last message to be user or assistant (for continuing conversations)
 	if lastNonSystemIndex >= 0 && lastUserMsgIndex != lastNonSystemIndex {
 		lastMsgRole := req.Messages[lastNonSystemIndex].Role
 		if lastMsgRole == "tool" {
@@ -50,31 +48,38 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	}
 
 	// Build history from all messages EXCEPT the last user message
-	// (includes previous user/assistant exchanges and any assistant messages after the last user)
 	var history []map[string]interface{}
+	if lastUserMsgIndex > 0 {
+		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
+	}
 	if lastUserMsgIndex < len(req.Messages)-1 {
-		// There are messages after the last user message (e.g., assistant response with tool_calls)
-		// Convert messages before the last user message
-		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
-		// Also add messages after the last user message to history
-		if lastUserMsgIndex+1 < len(req.Messages) {
-			_, afterUserMsgs := convertMessages(req.Messages[lastUserMsgIndex+1:])
-			history = append(history, afterUserMsgs...)
-		}
-	} else if lastUserMsgIndex > 0 {
-		// Last user message is not at the end, get messages before it
-		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
+		_, afterUserMsgs := convertMessages(req.Messages[lastUserMsgIndex+1:])
+		history = append(history, afterUserMsgs...)
 	}
 
 	// Extract text content and images from the last user message
 	userTextContent := extractTextContent(req.Messages[lastUserMsgIndex].Content)
 	userImages := extractImages(req.Messages[lastUserMsgIndex].Content)
 
-	// Build userInputMessage (following Python converter format)
+	// Get envState
+	envState := getEnvState()
+
+	// Build userInputMessageContext with envState
+	userInputMessageContext := map[string]interface{}{
+		"envState": envState,
+	}
+
+	// Add tools to userInputMessageContext
+	if tools != nil {
+		userInputMessageContext["tools"] = tools
+	}
+
+	// Build userInputMessage (following Kiro format)
 	userInputMessage := map[string]interface{}{
-		"content": userTextContent,
-		"modelId": normalizeModelName(req.Model),
-		"origin":  "AI_EDITOR",
+		"content":                 userTextContent,
+		"modelId":                 normalizeModelName(req.Model),
+		"origin":                  "KIRO_CLI",
+		"userInputMessageContext": userInputMessageContext,
 	}
 
 	// Add images if present (separate field)
@@ -82,17 +87,12 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		userInputMessage["images"] = userImages
 	}
 
-	// Add tools to userInputMessageContext
-	if tools != nil {
-		userInputMessage["userInputMessageContext"] = map[string]interface{}{
-			"tools": tools,
-		}
-	}
-
 	// Build conversationState structure (Kiro's native format)
 	conversationState := map[string]interface{}{
-		"chatTriggerType": "MANUAL",
-		"conversationId":  conversationID,
+		"chatTriggerType":     "MANUAL",
+		"conversationId":      conversationID,
+		"agentContinuationId": generateAgentContinuationId(),
+		"agentTaskType":       "vibe",
 		"currentMessage": map[string]interface{}{
 			"userInputMessage": userInputMessage,
 		},
@@ -117,8 +117,6 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		payload["systemPrompt"] = systemPrompt
 	}
 
-	// Tools are now in userInputMessageContext, not at top level
-
 	if req.MaxTokens > 0 {
 		payload["maxTokens"] = req.MaxTokens
 	}
@@ -127,7 +125,47 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		payload["temperature"] = req.Temperature
 	}
 
+	if req.TopP > 0 {
+		payload["topP"] = req.TopP
+	}
+
+	payload["enableStreaming"] = req.Stream
+
 	return payload, nil
+}
+
+func getEnvState() map[string]interface{} {
+	osName := "linux"
+	cwd := "/home/user"
+	if IsExecEnv() {
+		if cwd, err := os.Getwd(); err == nil {
+			cwd = cwd
+		}
+	}
+	return map[string]interface{}{
+		"operatingSystem":         osName,
+		"currentWorkingDirectory": cwd,
+	}
+}
+
+func IsExecEnv() bool {
+	return true
+}
+
+func generateAgentContinuationId() string {
+	// Generate a UUID-like string for agentContinuationId
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		randHex(8), randHex(4), randHex(4), randHex(4), randHex(12))
+}
+
+func randHex(n int) string {
+	hexChars := "0123456789abcdef"
+	result := make([]byte, n)
+	for i := 0; i < n; i++ {
+		// Use simple deterministic values for now
+		result[i] = hexChars[i%16]
+	}
+	return string(result)
 }
 
 func normalizeModelName(name string) string {
@@ -173,6 +211,7 @@ func normalizeModelName(name string) string {
 func convertMessages(msgs []models.ChatMessage) (string, []map[string]interface{}) {
 	var systemPrompt strings.Builder
 	var converted []map[string]interface{}
+	envState := getEnvState()
 
 	for _, msg := range msgs {
 		if msg.Role == "system" {
@@ -186,58 +225,96 @@ func convertMessages(msgs []models.ChatMessage) (string, []map[string]interface{
 			continue
 		}
 
-		convertedMsg := map[string]interface{}{
-			"role": msg.Role,
-		}
-
-		// Handle content
+		// Build Kiro format: userInputMessage or assistantResponseMessage
+		var convertedMsg map[string]interface{}
 		content := extractTextContent(msg.Content)
-		if content != "" {
-			convertedMsg["content"] = []map[string]interface{}{
-				{"type": "text", "text": content},
+
+		if msg.Role == "user" || msg.Role == "tool" {
+			// Both user and tool messages become userInputMessage in Kiro format
+			// Tool results are embedded in userInputMessageContext
+			userInputMsg := map[string]interface{}{
+				"content": content,
+				"origin":  "KIRO_CLI",
 			}
-		} else {
-			convertedMsg["content"] = []map[string]interface{}{}
+
+			// Add envState
+			userInputMsgContext := map[string]interface{}{
+				"envState": envState,
+			}
+
+			// Handle tool results (for both tool role messages and user messages with tool results)
+			toolResults := buildToolResults(msg)
+			if len(toolResults) > 0 {
+				userInputMsgContext["toolResults"] = toolResults
+			}
+
+			userInputMsg["userInputMessageContext"] = userInputMsgContext
+
+			// Handle images in user message
+			images := extractImages(msg.Content)
+			if len(images) > 0 {
+				userInputMsg["images"] = images
+			}
+
+			convertedMsg = map[string]interface{}{
+				"userInputMessage": userInputMsg,
+			}
+		} else if msg.Role == "assistant" {
+			assistantMsg := map[string]interface{}{
+				"content": content,
+			}
+
+			// Add messageId if available
+			if msg.Name != "" {
+				assistantMsg["messageId"] = msg.Name
+			}
+
+			// Handle tool calls
+			if len(msg.ToolCalls) > 0 {
+				toolUses := make([]map[string]interface{}, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					toolUses = append(toolUses, map[string]interface{}{
+						"toolUseId": tc.ID,
+						"name":      tc.Function.Name,
+						"input":     parseArguments(tc.Function.Arguments),
+					})
+				}
+				assistantMsg["toolUses"] = toolUses
+			}
+
+			convertedMsg = map[string]interface{}{
+				"assistantResponseMessage": assistantMsg,
+			}
 		}
 
-		// Handle tool calls (assistant message with tool_calls)
-		if len(msg.ToolCalls) > 0 {
-			toolCalls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
-				toolCalls = append(toolCalls, map[string]interface{}{
-					"type":  "toolUse",
-					"id":    tc.ID,
-					"name":  tc.Function.Name,
-					"input": parseArguments(tc.Function.Arguments),
-				})
-			}
-			convertedMsg["toolCalls"] = toolCalls
+		if convertedMsg != nil {
+			converted = append(converted, convertedMsg)
 		}
-
-		// Handle tool results (tool role)
-		if msg.Role == "tool" {
-			toolUseID := msg.ToolCallID
-			if toolUseID == "" {
-				toolUseID = msg.Name // Fallback to name
-			}
-			convertedMsg["toolUseId"] = toolUseID
-			convertedMsg["content"] = []map[string]interface{}{
-				{"type": "toolResult", "toolUseId": toolUseID, "content": content},
-			}
-		}
-
-		// Handle images in content
-		images := extractImages(msg.Content)
-		if len(images) > 0 {
-			contentBlocks := convertedMsg["content"].([]map[string]interface{})
-			contentBlocks = append(contentBlocks, images...)
-			convertedMsg["content"] = contentBlocks
-		}
-
-		converted = append(converted, convertedMsg)
 	}
 
 	return systemPrompt.String(), converted
+}
+
+func buildToolResults(msg models.ChatMessage) []map[string]interface{} {
+	var results []map[string]interface{}
+
+	// Handle tool results from tool role messages
+	if msg.Role == "tool" {
+		toolUseID := msg.ToolCallID
+		if toolUseID == "" {
+			toolUseID = msg.Name
+		}
+		content := extractTextContent(msg.Content)
+		results = append(results, map[string]interface{}{
+			"toolUseId": toolUseID,
+			"content": []map[string]interface{}{
+				{"text": content},
+			},
+			"status": "success",
+		})
+	}
+
+	return results
 }
 
 func convertTools(tools []models.Tool) []map[string]interface{} {
@@ -270,11 +347,16 @@ func convertTools(tools []models.Tool) []map[string]interface{} {
 			continue
 		}
 
+		// Wrap inputSchema in {"json": ...} as per Kiro format
+		wrappedSchema := map[string]interface{}{
+			"json": inputSchema,
+		}
+
 		result = append(result, map[string]interface{}{
-			"toolSpec": map[string]interface{}{
+			"toolSpecification": map[string]interface{}{
 				"name":        name,
 				"description": description,
-				"inputSchema": inputSchema,
+				"inputSchema": wrappedSchema,
 			},
 		})
 	}

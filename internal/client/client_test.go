@@ -25,6 +25,9 @@ type mockAuthManager struct {
 	refreshErr  error
 	forceErr    error
 	refreshCall int
+	profileArn  string
+	region      string
+	apiHost     string
 }
 
 func (m *mockAuthManager) GetAccessToken() (string, error) {
@@ -40,6 +43,18 @@ func (m *mockAuthManager) ForceRefresh() (string, error) {
 		return "", m.forceErr
 	}
 	return m.token, nil
+}
+
+func (m *mockAuthManager) ProfileArn() string {
+	return m.profileArn
+}
+
+func (m *mockAuthManager) Region() string {
+	return m.region
+}
+
+func (m *mockAuthManager) APIHost() string {
+	return m.apiHost
 }
 
 func TestConstants(t *testing.T) {
@@ -83,8 +98,8 @@ func TestDoRequest_Success(t *testing.T) {
 		if auth != "Bearer test-token" {
 			t.Errorf("Authorization header: got %q, want Bearer test-token", auth)
 		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("Content-Type: got %s, want application/json", r.Header.Get("Content-Type"))
+		if r.Header.Get("Content-Type") != "application/x-amz-json-1.0" {
+			t.Errorf("Content-Type: got %s, want application/x-amz-json-1.0", r.Header.Get("Content-Type"))
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"result":"ok"}`))
@@ -417,11 +432,11 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
+	req.Header.Set("x-amzn-codewhisperer-optout", "false")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(req)
@@ -525,18 +540,24 @@ func TestKiroClientWithRealCredentials_SimpleWithConverter(t *testing.T) {
 		t.Fatalf("GetAccessToken failed: %v", err)
 	}
 	t.Logf("Got access token, length: %d", len(token))
+	t.Logf("Profile ARN: %s", authManager.ProfileArn())
+
+	// Use profileArn from env or empty for aws_sso
+	profileArn := os.Getenv("KIRO_PROFILE_ARN")
+
+	// Add system message to simulate real Kiro CLI context
+	systemPrompt := "Follow this instruction:"
+	userContent := "Hi"
 
 	// Use converter to build payload for simple message
 	conversationID := "conv-" + strings.Repeat("x", 32)
 	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
 		Model: "claude-haiku-4.5",
 		Messages: []models.ChatMessage{
-			{
-				Role:    "user",
-				Content: "Hi",
-			},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userContent},
 		},
-	}, conversationID, authManager.ProfileArn())
+	}, conversationID, profileArn)
 
 	if err != nil {
 		t.Fatalf("BuildKiroPayload failed: %v", err)
@@ -560,11 +581,11 @@ func TestKiroClientWithRealCredentials_SimpleWithConverter(t *testing.T) {
 		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
+	req.Header.Set("x-amzn-codewhisperer-optout", "false")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 	resp, err := httpClient.Do(req)
@@ -689,11 +710,11 @@ func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
 		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
+	req.Header.Set("x-amzn-codewhisperer-optout", "false")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
 	httpClient := &http.Client{Timeout: 120 * time.Second}
 	resp, err := httpClient.Do(req)
@@ -826,11 +847,11 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 		t.Fatalf("Failed to create request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
-	req.Header.Set("x-amzn-codewhisperer-optout", "true")
-	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
+	req.Header.Set("x-amzn-codewhisperer-optout", "false")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
 	httpClient := &http.Client{Timeout: 120 * time.Second}
 	resp, err := httpClient.Do(req)

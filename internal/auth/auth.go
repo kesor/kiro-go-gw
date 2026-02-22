@@ -22,6 +22,9 @@ import (
 type AuthProvider interface {
 	GetAccessToken() (string, error)
 	ForceRefresh() (string, error)
+	ProfileArn() string
+	Region() string
+	APIHost() string
 }
 
 type AuthType string

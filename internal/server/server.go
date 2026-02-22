@@ -108,16 +108,33 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simplified model list - in production would fetch from Kiro API
-	modelList := []models.Model{
-		{ID: "auto", Object: "model", OwnedBy: "kiro"},
-		{ID: "claude-sonnet-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-haiku-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-opus-4.5", Object: "model", OwnedBy: "anthropic"},
-		{ID: "claude-sonnet-4", Object: "model", OwnedBy: "anthropic"},
-		{ID: "deepseek-v3.2", Object: "model", OwnedBy: "deepseek"},
-		{ID: "mini-max-m2.1", Object: "model", OwnedBy: "minimax"},
-		{ID: "qwen3-coder-next", Object: "model", OwnedBy: "qwen"},
+	profileArn := s.authMgr.ProfileArn()
+	if profileArn == "" {
+		http.Error(w, "profileArn not configured", http.StatusBadRequest)
+		return
+	}
+
+	kiroModels, err := s.kiroClient.ListAvailableModels(r.Context(), profileArn)
+	if err != nil {
+		log.Printf("Failed to fetch models from Kiro API: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to fetch models: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	modelList := make([]models.Model, 0, len(kiroModels.Models))
+	for _, m := range kiroModels.Models {
+		modelList = append(modelList, models.Model{
+			ID:                    m.ModelID,
+			Object:                "model",
+			Created:               0,
+			OwnedBy:               "anthropic",
+			Permission:            nil,
+			Description:           m.Description,
+			RateMultiplier:        m.RateMultiplier,
+			RateUnit:              m.RateUnit,
+			MaxInputTokens:        m.TokenLimits.MaxInputTokens,
+			SupportsPromptCaching: m.PromptCaching.SupportsPromptCaching,
+		})
 	}
 
 	json.NewEncoder(w).Encode(models.ModelList{

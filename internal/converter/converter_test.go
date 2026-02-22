@@ -49,8 +49,8 @@ func TestBuildKiroPayload_Basic(t *testing.T) {
 	if userInputMsg["modelId"] != "claude-sonnet-4.5" {
 		t.Errorf("modelId: got %v, want claude-sonnet-4.5", userInputMsg["modelId"])
 	}
-	if userInputMsg["origin"] != "AI_EDITOR" {
-		t.Errorf("origin: got %v, want AI_EDITOR", userInputMsg["origin"])
+	if userInputMsg["origin"] != "KIRO_CLI" {
+		t.Errorf("origin: got %v, want KIRO_CLI", userInputMsg["origin"])
 	}
 	// Content can be string or array of content blocks
 	switch content := userInputMsg["content"].(type) {
@@ -164,7 +164,7 @@ func TestBuildKiroPayload_Tools(t *testing.T) {
 		t.Errorf("tool count: got %d, want 1", len(tools))
 	}
 
-	toolSpec := tools[0]["toolSpec"].(map[string]interface{})
+	toolSpec := tools[0]["toolSpecification"].(map[string]interface{})
 	if toolSpec["name"] != "calculator" {
 		t.Errorf("tool name: got %v, want calculator", toolSpec["name"])
 	}
@@ -199,7 +199,7 @@ func TestBuildKiroPayload_ToolsFlatFormat(t *testing.T) {
 
 	ctx := userInputMsg["userInputMessageContext"].(map[string]interface{})
 	tools := ctx["tools"].([]map[string]interface{})
-	toolSpec := tools[0]["toolSpec"].(map[string]interface{})
+	toolSpec := tools[0]["toolSpecification"].(map[string]interface{})
 
 	if toolSpec["name"] != "my_tool" {
 		t.Errorf("tool name: got %v, want my_tool", toolSpec["name"])
@@ -262,33 +262,36 @@ func TestBuildKiroPayload_ToolCalls(t *testing.T) {
 		t.Errorf("content: got %v, want 'Calculate 2+2'", content)
 	}
 
-	// Check history contains the assistant message with tool calls
+	// Check history contains the assistant message with tool uses
 	history, ok := convState["history"].([]map[string]interface{})
 	if !ok {
 		t.Fatal("history not found or wrong type")
 	}
 
-	foundToolCalls := false
+	foundToolUses := false
 	for _, msg := range history {
-		if toolCalls, exists := msg["toolCalls"]; exists {
-			// Handle both []interface{} and []map[string]interface{} types
-			switch tc := toolCalls.(type) {
-			case []interface{}:
-				if len(tc) > 0 {
-					foundToolCalls = true
+		if assistantMsg, exists := msg["assistantResponseMessage"]; exists {
+			if am, ok := assistantMsg.(map[string]interface{}); ok {
+				if toolUses, exists := am["toolUses"]; exists {
+					switch tu := toolUses.(type) {
+					case []interface{}:
+						if len(tu) > 0 {
+							foundToolUses = true
+						}
+					case []map[string]interface{}:
+						if len(tu) > 0 {
+							foundToolUses = true
+						}
+					}
 				}
-			case []map[string]interface{}:
-				if len(tc) > 0 {
-					foundToolCalls = true
-				}
-			}
-			if foundToolCalls {
-				break
 			}
 		}
+		if foundToolUses {
+			break
+		}
 	}
-	if !foundToolCalls {
-		t.Error("Expected tool calls in history")
+	if !foundToolUses {
+		t.Error("Expected tool uses in history")
 	}
 }
 
@@ -357,13 +360,36 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 
 	foundToolResult := false
 	for _, msg := range history {
-		role, _ := msg["role"].(string)
-		if role == "tool" {
-			toolUseID, _ := msg["toolUseId"].(string)
-			if toolUseID == "call_abc123" {
-				foundToolResult = true
-				break
+		if userMsg, exists := msg["userInputMessage"]; exists {
+			if um, ok := userMsg.(map[string]interface{}); ok {
+				if ctx, exists := um["userInputMessageContext"]; exists {
+					if c, ok := ctx.(map[string]interface{}); ok {
+						if toolResults, exists := c["toolResults"]; exists {
+							switch tr := toolResults.(type) {
+							case []interface{}:
+								for _, trItem := range tr {
+									if trm, ok := trItem.(map[string]interface{}); ok {
+										if trm["toolUseId"] == "call_abc123" {
+											foundToolResult = true
+											break
+										}
+									}
+								}
+							case []map[string]interface{}:
+								for _, trItem := range tr {
+									if trItem["toolUseId"] == "call_abc123" {
+										foundToolResult = true
+										break
+									}
+								}
+							}
+						}
+					}
+				}
 			}
+		}
+		if foundToolResult {
+			break
 		}
 	}
 	if !foundToolResult {
@@ -444,14 +470,18 @@ func TestExtractTextContent(t *testing.T) {
 		{"text block", []interface{}{
 			map[string]interface{}{"type": "text", "text": "Hello"},
 		}, "Hello"},
-		{"multiple text blocks", []interface{}{
-			map[string]interface{}{"type": "text", "text": "Hello "},
+		{"multiple text blocks concatenated", []interface{}{
+			map[string]interface{}{"type": "text", "text": "Hello"},
 			map[string]interface{}{"type": "text", "text": "World"},
-		}, "Hello World"},
+		}, "HelloWorld"}, // Note: no separator between blocks
 		{"mixed blocks", []interface{}{
 			map[string]interface{}{"type": "text", "text": "Text"},
 			map[string]interface{}{"type": "image", "source": "data:image/png"},
 		}, "Text"},
+		{"unknown type", []interface{}{
+			map[string]interface{}{"type": "unknown", "data": "value"},
+		}, ""},
+		{"integer fallback", 42, "42"},
 	}
 
 	for _, tc := range tests {
@@ -515,6 +545,7 @@ func TestParseArguments(t *testing.T) {
 		{"nested json", `{"a": {"b": 1}}`, "a", map[string]interface{}{"b": float64(1)}},
 		{"empty string", "", "", map[string]interface{}{}},
 		{"invalid json", `not json`, "", map[string]interface{}{}},
+		{"array json", `["a", "b"]`, "", map[string]interface{}{}},
 	}
 
 	for _, tc := range tests {
@@ -531,6 +562,106 @@ func TestParseArguments(t *testing.T) {
 				if string(data) != string(wantData) {
 					t.Errorf("parseArguments(%q): got %s, want %s", tc.input, data, wantData)
 				}
+			}
+		})
+	}
+}
+
+func TestExtractContentBlocks(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected int
+	}{
+		{"nil", nil, 0},
+		{"empty string", "", 0},
+		{"non-empty string", "hello", 1},
+		{"empty array", []interface{}{}, 0},
+		{"text block", []interface{}{
+			map[string]interface{}{"type": "text", "text": "Hello"},
+		}, 1},
+		{"empty text block", []interface{}{
+			map[string]interface{}{"type": "text", "text": ""},
+		}, 0},
+		{"image url block", []interface{}{
+			map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": "https://example.com/image.png",
+				},
+			},
+		}, 1},
+		{"base64 image block", []interface{}{
+			map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": "data:image/png;base64,iVBORw0KGgo=",
+				},
+			},
+		}, 1},
+		{"mixed blocks", []interface{}{
+			map[string]interface{}{"type": "text", "text": "Hello"},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "https://example.com/image.png"}},
+		}, 2},
+		{"unknown block type", []interface{}{
+			map[string]interface{}{"type": "unknown", "data": "value"},
+		}, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extractContentBlocks(tc.input)
+			if len(result) != tc.expected {
+				t.Errorf("extractContentBlocks(%v): got %d blocks, want %d", tc.input, len(result), tc.expected)
+			}
+		})
+	}
+}
+
+func TestExtractMediaType(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"png", "data:image/png", "image/png"},
+		{"png with base64", "data:image/png;base64,ABC123", "image/png"},
+		{"jpeg", "data:image/jpeg", "image/png"},   // Falls back to png (no semicolon)
+		{"gif", "data:image/gif", "image/png"},     // Falls back to png (no semicolon)
+		{"webp", "data:image/webp", "image/png"},   // Falls back to png (no semicolon)
+		{"svg", "data:image/svg+xml", "image/png"}, // Falls back to png (no semicolon)
+		{"no semicolon", "not-a-data-url", "image/png"},
+		{"empty semicolon", "data:", "image/png"},
+		{"no prefix", "image/png", "image/png"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extractMediaType(tc.input)
+			if result != tc.expected {
+				t.Errorf("extractMediaType(%q): got %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestExtractBase64Data(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"valid base64", "data:image/png;base64,ABC123", "ABC123"},
+		{"jpeg base64", "data:image/jpeg;base64,xyz789", "xyz789"},
+		{"no comma", "no-comma-here", ""},
+		{"empty after comma", "data:image/png,", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extractBase64Data(tc.input)
+			if result != tc.expected {
+				t.Errorf("extractBase64Data(%q): got %q, want %q", tc.input, result, tc.expected)
 			}
 		})
 	}
@@ -693,29 +824,32 @@ func TestBuildKiroPayload_ToolCallsInHistory(t *testing.T) {
 	convState := payload["conversationState"].(map[string]interface{})
 	history := convState["history"].([]map[string]interface{})
 
-	// Find the assistant message with tool calls in history
-	var foundToolCall bool
+	// Find the assistant message with tool uses in history (Kiro format)
+	var foundToolUse bool
 	for _, msg := range history {
-		if toolCalls, ok := msg["toolCalls"]; ok {
-			// Handle both []interface{} and []map[string]interface{} types
-			switch tc := toolCalls.(type) {
-			case []interface{}:
-				if len(tc) > 0 {
-					foundToolCall = true
-				}
-			case []map[string]interface{}:
-				if len(tc) > 0 {
-					foundToolCall = true
+		if assistantMsg, ok := msg["assistantResponseMessage"]; ok {
+			if am, ok := assistantMsg.(map[string]interface{}); ok {
+				if toolUses, exists := am["toolUses"]; exists {
+					switch tu := toolUses.(type) {
+					case []interface{}:
+						if len(tu) > 0 {
+							foundToolUse = true
+						}
+					case []map[string]interface{}:
+						if len(tu) > 0 {
+							foundToolUse = true
+						}
+					}
 				}
 			}
-			if foundToolCall {
-				break
-			}
+		}
+		if foundToolUse {
+			break
 		}
 	}
 
-	if !foundToolCall {
-		t.Error("Expected to find tool calls in history")
+	if !foundToolUse {
+		t.Error("Expected to find tool uses in history")
 	}
 }
 
@@ -782,5 +916,207 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 	}
 	if source["url"] != "https://example.com/image.png" {
 		t.Errorf("image url: got %v", source["url"])
+	}
+}
+
+func TestBuildKiroPayload_TopP(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model:    "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{{Role: "user", Content: "Hello"}},
+		TopP:     0.9,
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	if payload["topP"] != 0.9 {
+		t.Errorf("topP: got %v, want 0.9", payload["topP"])
+	}
+}
+
+func TestBuildKiroPayload_EnableStreaming(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model:    "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{{Role: "user", Content: "Hello"}},
+		Stream:   true,
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	if payload["enableStreaming"] != true {
+		t.Errorf("enableStreaming: got %v, want true", payload["enableStreaming"])
+	}
+}
+
+func TestBuildKiroPayload_LastMessageTool(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Calculate 2+2"},
+			{
+				Role:    "assistant",
+				Content: "Let me calculate",
+				ToolCalls: []models.ToolCall{
+					{
+						ID:   "call_abc",
+						Type: "function",
+						Function: &models.ToolCallFunction{
+							Name:      "calculator",
+							Arguments: `{"expression": "2+2"}`,
+						},
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				Content:    "4",
+				ToolCallID: "call_abc",
+			},
+		},
+	}
+
+	// Last message is tool result - should return error
+	_, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err == nil {
+		t.Fatal("Expected error when last message is tool result")
+	}
+}
+
+func TestBuildKiroPayload_SystemOnly(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "system", Content: "You are helpful."},
+		},
+	}
+
+	_, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err == nil {
+		t.Fatal("Expected error when only system message exists")
+	}
+}
+
+func TestBuildKiroPayload_LastUserMessageNotAtEnd(t *testing.T) {
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Hello"},
+			{Role: "assistant", Content: "Hi there!"},
+			{Role: "assistant", Content: "How can I help?"}, // Assistant after user - weird but valid
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+	history := convState["history"].([]map[string]interface{})
+
+	// History should have messages before and after the user message
+	if len(history) != 2 {
+		t.Errorf("history length: got %d, want 2", len(history))
+	}
+}
+
+func TestNormalizeModelName_DateSuffix(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Date suffix removal with single digit version
+		{"claude-haiku-3-0-20251001", "claude-haiku-3.0"},
+		{"claude-opus-4-0-20250915", "claude-opus-4.0"},
+		// Latest suffix
+		{"claude-sonnet-4-0-latest", "claude-sonnet-4.0"},
+		{"claude-haiku-3-5-latest", "claude-haiku-3.5"},
+		// Empty string
+		{"", ""},
+		// Single part (no dash)
+		{"claude", "claude"},
+		// Date with multi-digit month/day
+		{"claude-haiku-4-5-20251231", "claude-haiku-4.5"},
+		// Not a date (has letters) - the -4-5 gets converted to -4.5 first
+		{"claude-haiku-4-5-abc", "claude-haiku-4.5-abc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeModelName(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeModelName(%q): got %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildToolResults(t *testing.T) {
+	// Test tool result with empty ToolCallID - uses Name as fallback
+	msg := models.ChatMessage{
+		Role:    "tool",
+		Content: "tool output",
+		Name:    "tool_name_fallback",
+	}
+
+	results := buildToolResults(msg)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(results))
+	}
+
+	if results[0]["toolUseId"] != "tool_name_fallback" {
+		t.Errorf("toolUseId: got %v, want tool_name_fallback", results[0]["toolUseId"])
+	}
+}
+
+func TestBuildKiroPayload_OnlySystemWithUser(t *testing.T) {
+	// Multiple system prompts followed by user
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "system", Content: "System 1"},
+			{Role: "system", Content: "System 2"},
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	// System prompts should be concatenated
+	if payload["systemPrompt"] != "System 1\nSystem 2" {
+		t.Errorf("systemPrompt: got %q", payload["systemPrompt"])
+	}
+}
+
+func TestBuildKiroPayload_EmptyHistory(t *testing.T) {
+	// Single user message - no history
+	req := &models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	payload, err := BuildKiroPayload(req, "test-conv-id", "")
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	convState := payload["conversationState"].(map[string]interface{})
+
+	// History should be empty or not present
+	if _, exists := convState["history"]; exists {
+		history := convState["history"].([]map[string]interface{})
+		if len(history) != 0 {
+			t.Errorf("history should be empty for single message, got %d", len(history))
+		}
 	}
 }

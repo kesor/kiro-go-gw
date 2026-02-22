@@ -97,11 +97,16 @@ type ModelList struct {
 }
 
 type Model struct {
-	ID         string        `json:"id"`
-	Object     string        `json:"object"`
-	Created    int           `json:"created,omitempty"`
-	OwnedBy    string        `json:"owned_by,omitempty"`
-	Permission []interface{} `json:"permission,omitempty"`
+	ID                    string        `json:"id"`
+	Object                string        `json:"object"`
+	Created               int           `json:"created,omitempty"`
+	OwnedBy               string        `json:"owned_by,omitempty"`
+	Permission            []interface{} `json:"permission,omitempty"`
+	Description           string        `json:"description,omitempty"`
+	RateMultiplier        float64       `json:"rate_multiplier,omitempty"`
+	RateUnit              string        `json:"rate_unit,omitempty"`
+	MaxInputTokens        int           `json:"max_input_tokens,omitempty"`
+	SupportsPromptCaching bool          `json:"supports_prompt_caching,omitempty"`
 }
 
 // Error response
