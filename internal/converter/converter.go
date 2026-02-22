@@ -84,13 +84,15 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	if len(userImages) > 0 {
 		imageRefs := ""
 		for _, img := range userImages {
-			source := img["source"].(map[string]interface{})
-			// If there's a URL field, add it as text reference
+			source, ok := img["source"].(map[string]interface{})
+			if !ok || source == nil {
+				continue
+			}
+			// Image source will have either "url" OR "bytes", never both (mutual exclusivity)
 			if url, ok := source["url"].(string); ok {
 				imageRefs += "Image: " + url + "\n"
-			}
-			// For base64 data URLs, include as text reference
-			if bytesVal, ok := source["bytes"].(string); ok && bytesVal != "" {
+			} else if bytesVal, ok := source["bytes"].(string); ok && bytesVal != "" {
+				// For base64 data URLs, include as text reference
 				imageRefs += "[Image data included]\n"
 			}
 		}
