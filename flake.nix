@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-utils.url = "github:numtide/flake-utils?rev=11707dc2f618dd54ca8739b309ec4fc024de578b";
     kiro-go-gw-src.src = ./.;
     kiro-go-gw-src.flake = false;
   };
@@ -13,7 +13,6 @@
       self,
       nixpkgs,
       flake-utils,
-      kiro-go-gw-src,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
