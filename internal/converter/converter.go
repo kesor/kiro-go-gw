@@ -138,8 +138,8 @@ func getEnvState() map[string]interface{} {
 	osName := "linux"
 	cwd := "/home/user"
 	if IsExecEnv() {
-		if cwd, err := os.Getwd(); err == nil {
-			cwd = cwd
+		if actualCwd, err := os.Getwd(); err == nil {
+			cwd = actualCwd
 		}
 	}
 	return map[string]interface{}{
