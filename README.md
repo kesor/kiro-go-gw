@@ -13,6 +13,7 @@ A lightweight Go implementation of a proxy gateway for the Kiro API (Amazon Q De
 - **Tool/function calling** - Support for Claude tools and function definitions
 - **Automatic token refresh** - Handles AWS SSO OIDC token expiration
 - **Retry logic** - Exponential backoff for rate limits and server errors
+- **Debug mode** - Log all HTTP requests/responses and auth events
 
 ## Quick Start
 
@@ -37,8 +38,34 @@ Set these environment variables:
 | `SERVER_PORT` | Listen port | `8000` |
 | `PROXY_API_KEY` | **Required** - API key for clients | (none) |
 | `KIRO_REGION` | AWS region | `us-east-1` |
+| `DEBUG` | Enable debug logging (`true`/`false`) | `false` |
+| `DEBUG_LOG_FILE` | Path to debug log file (empty = stdout) | stdout |
 
 > **Important**: You must set a strong, unique `PROXY_API_KEY` before running the server.
+
+### Debug Mode
+
+When `DEBUG=true`, the server logs all HTTP traffic and authentication events in JSON format:
+
+```bash
+# Log to stdout
+export DEBUG=true
+./bin/server
+
+# Log to file
+export DEBUG=true
+export DEBUG_LOG_FILE=/tmp/kiro-debug.log
+./bin/server
+```
+
+Debug output includes:
+- **Gateway requests/responses** - Client to gateway HTTP traffic
+- **Amazon Q requests/responses** - Gateway to Amazon Q HTTP traffic  
+- **Auth events** - Token refresh, rotation, and failures
+
+Sensitive data (API keys, tokens) are best-effort redacted in logs.
+
+> **Warning:** Debug logs may contain sensitive data. Treat debug logs as sensitive and avoid enabling `DEBUG` in production or sharing log files.
 
 ### Authentication (choose one)
 

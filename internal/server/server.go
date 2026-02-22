@@ -19,6 +19,7 @@ import (
 	"kiro-go-gw/internal/client"
 	"kiro-go-gw/internal/config"
 	"kiro-go-gw/internal/converter"
+	"kiro-go-gw/internal/debug"
 	"kiro-go-gw/internal/models"
 	"kiro-go-gw/internal/streaming"
 )
@@ -103,6 +104,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -110,6 +113,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.verifyAPIKey(r); err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, nil, 0)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusUnauthorized, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 
@@ -119,6 +124,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to fetch models from Kiro API: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to fetch models: %v", err), http.StatusBadGateway)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusBadGateway, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 
@@ -147,13 +153,21 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(models.ModelList{
+	resp := models.ModelList{
 		Object: "list",
 		Data:   modelList,
-	})
+	}
+
+	respBytes, _ := json.Marshal(resp)
+	debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, nil, time.Since(startTime).Milliseconds())
+	debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusOK, w.Header(), respBytes, time.Since(startTime).Milliseconds())
+
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -162,13 +176,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Verify API key
 	if err := s.verifyAPIKey(r); err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, nil, 0)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusUnauthorized, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 
 	// Parse request
 	var req models.ChatCompletionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	bodyBytes, _ := io.ReadAll(r.Body)
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, bodyBytes, time.Since(startTime).Milliseconds())
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusBadRequest, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 
@@ -179,23 +198,28 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	payload, err := converter.BuildKiroPayload(&req, conversationID, s.authMgr.ProfileArn())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to build payload: %v", err), http.StatusBadRequest)
+		debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, bodyBytes, time.Since(startTime).Milliseconds())
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusBadRequest, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 
 	// Make request to Kiro API
 	url := s.authMgr.APIHost() + "/generateAssistantResponse"
 
+	debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, bodyBytes, time.Since(startTime).Milliseconds())
+
 	if req.Stream {
-		s.handleStreaming(w, r, url, payload, req.Model)
+		s.handleStreaming(w, r, url, payload, req.Model, startTime)
 	} else {
-		s.handleNonStreaming(w, r, url, payload, req.Model)
+		s.handleNonStreaming(w, r, url, payload, req.Model, startTime)
 	}
 }
 
-func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, url string, payload map[string]interface{}, model string) {
+func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, url string, payload map[string]interface{}, model string, startTime time.Time) {
 	resp, err := s.kiroClient.DoRequest(r.Context(), "POST", url, payload, true)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Request failed: %v", err), http.StatusBadGateway)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusBadGateway, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 	defer resp.Body.Close()
@@ -203,6 +227,7 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, url str
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		http.Error(w, fmt.Sprintf("Kiro API error: %s", body), resp.StatusCode)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), resp.StatusCode, resp.Header, body, time.Since(startTime).Milliseconds())
 		return
 	}
 
@@ -223,12 +248,15 @@ func (s *Server) handleStreaming(w http.ResponseWriter, r *http.Request, url str
 			f.Flush()
 		}
 	}
+
+	debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusOK, w.Header(), []byte("[streaming]"), time.Since(startTime).Milliseconds())
 }
 
-func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, url string, payload map[string]interface{}, model string) {
+func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, url string, payload map[string]interface{}, model string, startTime time.Time) {
 	resp, err := s.kiroClient.DoRequest(r.Context(), "POST", url, payload, false)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Request failed: %v", err), http.StatusBadGateway)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusBadGateway, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
 	defer resp.Body.Close()
@@ -236,6 +264,7 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, url 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		http.Error(w, fmt.Sprintf("Kiro API error: %s", body), resp.StatusCode)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), resp.StatusCode, resp.Header, body, time.Since(startTime).Milliseconds())
 		return
 	}
 
@@ -243,8 +272,12 @@ func (s *Server) handleNonStreaming(w http.ResponseWriter, r *http.Request, url 
 	openaiResp, err := streaming.CollectResponse(resp.Body, model)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to parse response: %v", err), http.StatusInternalServerError)
+		debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusInternalServerError, nil, []byte(err.Error()), time.Since(startTime).Milliseconds())
 		return
 	}
+
+	respBytes, _ := json.Marshal(openaiResp)
+	debug.LogResponse(debug.EventSourceGateway, r.Method, r.URL.String(), http.StatusOK, w.Header(), respBytes, time.Since(startTime).Milliseconds())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(openaiResp)
@@ -289,6 +322,9 @@ func Run() {
 	// Load config
 	cfg := config.Load()
 
+	// Initialize debug logger
+	debug.Init(cfg.Debug, cfg.DebugLogFile)
+
 	// Create server
 	srv, err := New(cfg)
 	if err != nil {
@@ -327,6 +363,7 @@ func Run() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
+	debug.Close()
 	log.Println("Server exited")
 }
 

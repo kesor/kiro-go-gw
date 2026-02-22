@@ -18,6 +18,8 @@ type Config struct {
 	CliDbFile    string
 	ClientID     string
 	ClientSecret string
+	Debug        bool
+	DebugLogFile string
 }
 
 func Load() *Config {
@@ -52,6 +54,8 @@ func Load() *Config {
 		CliDbFile:    expandPath(getEnv("KIRO_CLI_DB_FILE", "")),
 		ClientID:     getEnv("KIRO_CLIENT_ID", ""),
 		ClientSecret: getEnv("KIRO_CLIENT_SECRET", ""),
+		Debug:        getEnv("DEBUG", "false") == "true",
+		DebugLogFile: getEnv("DEBUG_LOG_FILE", ""),
 	}
 }
 

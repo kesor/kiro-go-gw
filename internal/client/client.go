@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"kiro-go-gw/internal/auth"
+	"kiro-go-gw/internal/debug"
 )
 
 const (
@@ -52,11 +53,13 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 
 		// Build request
 		var body io.Reader
+		var bodyBytes []byte
 		if payload != nil {
 			jsonData, err := json.Marshal(payload)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal payload: %w", err)
 			}
+			bodyBytes = jsonData
 			body = bytes.NewBuffer(jsonData)
 		}
 
@@ -72,6 +75,8 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 		req.Header.Set("x-amzn-codewhisperer-optout", "false")
 		req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
 
+		startTime := time.Now()
+
 		// Use streaming client for streaming requests
 		client := c.httpClient
 		if stream {
@@ -82,6 +87,20 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 		}
 
 		resp, err := client.Do(req)
+		duration := time.Since(startTime).Milliseconds()
+
+		debug.LogRequest(debug.EventSourceAmazonQ, method, url, req.Header, bodyBytes, duration)
+
+		if err != nil {
+			debug.LogResponse(debug.EventSourceAmazonQ, method, url, 0, nil, []byte(err.Error()), duration)
+		} else if stream {
+			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, []byte("[streaming]"), duration)
+		} else if debug.Enabled() {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, respBody, duration)
+		}
+
 		if err != nil {
 			lastErr = err
 			// Check if retryable
@@ -209,15 +228,30 @@ func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string)
 	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererruntime/0.1.13922 os/linux lang/rust/1.92.0 m/F,C app/AmazonQ-For-CLI")
 	req.Header.Set("x-amzn-codewhisperer-optout", "false")
 
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime).Milliseconds()
+
+	debug.LogRequest(debug.EventSourceAmazonQ, "POST", endpoint, req.Header, jsonData, duration)
+
 	if err != nil {
+		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, 0, nil, []byte(err.Error()), duration)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ListAvailableModels failed: %s", body)
+		if debug.Enabled() {
+			body, _ := io.ReadAll(resp.Body)
+			debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, body, duration)
+		}
+		return nil, fmt.Errorf("ListAvailableModels failed: status %d", resp.StatusCode)
+	}
+
+	if debug.Enabled() {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, respBody, duration)
 	}
 
 	var result ListModelsResponse
