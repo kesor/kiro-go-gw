@@ -296,22 +296,3 @@ func TestCollectResponse_Content(t *testing.T) {
 	}
 	_ = err // May error but shouldn't crash
 }
-
-func TestEscapeJSON(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"hello", `"hello"`},
-		{"hello world", `"hello world"`},
-		{`hello "world"`, `"hello \"world\""`},
-		{"\n\t", `"\n\t"`},
-	}
-
-	for _, tt := range tests {
-		result := escapeJSON(tt.input)
-		if result != tt.expected {
-			t.Errorf("escapeJSON(%q): got %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}

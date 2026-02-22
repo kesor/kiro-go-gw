@@ -255,7 +255,7 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 			if err != nil {
 				errorCount++
 				if errorCount > maxErrors {
-					ch <- fmt.Sprintf(`data: {"error":%s}`+"\n\n", escapeJSON("stream decode error limit exceeded: "+err.Error()))
+					ch <- fmt.Sprintf(`data: {"error":%q}`+"\n\n", "stream decode error limit exceeded: "+err.Error())
 					return
 				}
 				continue
@@ -294,13 +294,13 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 				if content, ok := payload["content"].(string); ok && content != "" {
 					// Send initial role on first content chunk
 					if handler.firstChunk {
-						roleChunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n",
-							handler.CompletionID(), handler.created, escapeJSON(model))
+						roleChunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%q,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n",
+							handler.CompletionID(), handler.created, model)
 						ch <- roleChunk
 						handler.firstChunk = false
 					}
-					chunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`+"\n\n",
-						handler.CompletionID(), handler.created, escapeJSON(model), escapeJSON(content))
+					chunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%q,"choices":[{"index":0,"delta":{"content":%q},"finish_reason":null}]}`+"\n\n",
+						handler.CompletionID(), handler.created, model, content)
 					ch <- chunk
 				}
 			case "messageStopEvent":
@@ -437,14 +437,6 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 	}
 
 	return resp, nil
-}
-
-func escapeJSON(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return `""` // Return empty quoted string on error (should be rare for valid UTF-8)
-	}
-	return string(b)
 }
 
 func generateCompletionID() string {
