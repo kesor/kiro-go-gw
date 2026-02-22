@@ -184,7 +184,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req models.ChatCompletionRequest
 	maxBodySize := int64(10 * 1024 * 1024) // 10MB limit
-	bodyBytes, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxBodySize))
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
 		return
@@ -326,9 +326,6 @@ func (s *Server) Start(addr string) error {
 func Run() {
 	// Load config
 	cfg := config.Load()
-
-	// Initialize debug logger
-	_ = debug.Init(cfg.Debug, cfg.DebugLogFile)
 
 	// Create server
 	srv, err := New(cfg)

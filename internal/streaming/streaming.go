@@ -294,13 +294,13 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 				if content, ok := payload["content"].(string); ok && content != "" {
 					// Send initial role on first content chunk
 					if handler.firstChunk {
-						roleChunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":"%s","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n",
-							handler.CompletionID(), handler.created, model)
+						roleChunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n",
+							handler.CompletionID(), handler.created, escapeJSON(model))
 						ch <- roleChunk
 						handler.firstChunk = false
 					}
-					chunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":"%s","choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`+"\n\n",
-						handler.CompletionID(), handler.created, model, escapeJSON(content))
+					chunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":%s,"choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`+"\n\n",
+						handler.CompletionID(), handler.created, escapeJSON(model), escapeJSON(content))
 					ch <- chunk
 				}
 			case "messageStopEvent":
