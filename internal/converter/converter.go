@@ -12,13 +12,25 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	systemPrompt, messages := convertMessages(req.Messages)
 	tools := convertTools(req.Tools)
 
-	// Build userInputMessage from the last user message
+	// Find the last user message for currentMessage
 	var userContent string
+	var history []map[string]interface{}
+
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
 			userContent = extractTextContent(req.Messages[i].Content)
 			break
 		}
+	}
+
+	// If no user message found, error
+	if userContent == "" {
+		return nil, fmt.Errorf("no user message found in request")
+	}
+
+	// Build history from all converted messages
+	if len(messages) > 0 {
+		history = messages
 	}
 
 	// Build conversationState structure (Kiro's native format)
@@ -35,8 +47,8 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	}
 
 	// Add history if there are previous messages
-	if len(messages) > 0 {
-		conversationState["history"] = messages
+	if len(history) > 0 {
+		conversationState["history"] = history
 	}
 
 	// Build payload

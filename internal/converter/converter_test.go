@@ -186,6 +186,7 @@ func TestBuildKiroPayload_ToolCalls(t *testing.T) {
 	req := &models.ChatCompletionRequest{
 		Model: "claude-sonnet-4.5",
 		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Calculate 2+2"},
 			{
 				Role:    "assistant",
 				Content: "I'll calculate that",
@@ -230,6 +231,7 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 	req := &models.ChatCompletionRequest{
 		Model: "claude-sonnet-4.5",
 		Messages: []models.ChatMessage{
+			{Role: "user", Content: "What is 2+2?"},
 			{
 				Role:       "tool",
 				Content:    "Result: 4",
