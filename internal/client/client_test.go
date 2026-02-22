@@ -753,9 +753,9 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 	// Use profileArn from auth
 	profileArn := authManager.ProfileArn()
 
-	// Use converter to build payload with image URL
-	// This will be converted to a text reference that triggers fs_read tool
-	imageURL := "https://example.com/test.png"
+	// Use converter to build payload with an embedded image data URL
+	// This avoids external network dependencies and does not rely on filesystem access
+	imageURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNg+P++HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
 
 	conversationID := "conv-" + strings.Repeat("x", 32)
 	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{

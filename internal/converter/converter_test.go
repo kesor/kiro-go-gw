@@ -953,6 +953,23 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 	if len(images) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(images))
 	}
+
+	// Verify that the image payload is correctly populated
+	image := images[0]
+	format, ok := image["format"].(string)
+	if !ok || format == "" {
+		t.Fatalf("image format not set correctly, got %v", image["format"])
+	}
+
+	source, ok := image["source"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("image source not set correctly, got %T", image["source"])
+	}
+
+	bytesVal, ok := source["bytes"].(string)
+	if !ok || bytesVal == "" {
+		t.Fatalf("image source.bytes not set or empty, got %v", source["bytes"])
+	}
 }
 
 func TestBuildKiroPayload_TopP(t *testing.T) {
@@ -1200,6 +1217,19 @@ func TestBuildKiroPayload_WebSearchTool(t *testing.T) {
 	if toolSpec["name"] != "web_search" {
 		t.Errorf("tool name: got %v, want web_search", toolSpec["name"])
 	}
+
+	// Verify inputSchema is wrapped as { "json": ... }
+	inputSchema, ok := toolSpec["inputSchema"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema not found in toolSpecification")
+	}
+	jsonWrapper, ok := inputSchema["json"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema should be wrapped in { json: ... }")
+	}
+	if jsonWrapper["type"] != "object" {
+		t.Errorf("inputSchema type: got %v, want object", jsonWrapper["type"])
+	}
 }
 
 func TestBuildKiroPayload_WebFetchTool(t *testing.T) {
@@ -1244,6 +1274,19 @@ func TestBuildKiroPayload_WebFetchTool(t *testing.T) {
 	toolSpec := tools[0]["toolSpecification"].(map[string]interface{})
 	if toolSpec["name"] != "web_fetch" {
 		t.Errorf("tool name: got %v, want web_fetch", toolSpec["name"])
+	}
+
+	// Verify inputSchema is wrapped as { "json": ... }
+	inputSchema, ok := toolSpec["inputSchema"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema not found in toolSpecification")
+	}
+	jsonWrapper, ok := inputSchema["json"].(map[string]interface{})
+	if !ok {
+		t.Fatal("inputSchema should be wrapped in { json: ... }")
+	}
+	if jsonWrapper["type"] != "object" {
+		t.Errorf("inputSchema type: got %v, want object", jsonWrapper["type"])
 	}
 }
 

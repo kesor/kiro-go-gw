@@ -78,23 +78,23 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		userInputMessageContext["tools"] = tools
 	}
 
-	// Add images as file path references that trigger fs_read tool
-	// Kiro's server handles reading images via the fs_read tool, not sent directly
+	// Add image metadata to the user input.
+	// URLs are added as textual "Image: <url>" references in the prompt text,
+	// and any inlined image bytes are attached in the `images` slice for downstream handling.
 	var images []map[string]interface{}
 	if len(userImages) > 0 {
-		// Convert image URLs to text references that trigger fs_read tool
+		// Convert image URLs to human-readable text references and record any embedded image data.
 		imageRefs := ""
 		for _, img := range userImages {
 			source := img["source"].(map[string]interface{})
-			// If there's a URL field, use it as text reference
+			// If there's a URL field, add it as text reference
 			if url, ok := source["url"].(string); ok {
 				imageRefs += "Image: " + url + "\n"
 			}
-			// Check for bytes (from successful fetch or data URL)
-			if bytes, ok := source["bytes"].(string); ok {
+			// Check for embedded bytes (from data URLs)
+			if bytesVal, ok := source["bytes"].(string); ok && bytesVal != "" {
 				images = append(images, img)
 				imageRefs += "[Image data included]\n"
-				_ = bytes
 			}
 		}
 		// Prepend image refs to content
