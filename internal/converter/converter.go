@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -161,9 +162,11 @@ func generateAgentContinuationId() string {
 func randHex(n int) string {
 	hexChars := "0123456789abcdef"
 	result := make([]byte, n)
+	if _, err := rand.Read(result); err != nil {
+		return ""
+	}
 	for i := 0; i < n; i++ {
-		// Use simple deterministic values for now
-		result[i] = hexChars[i%16]
+		result[i] = hexChars[result[i]%16]
 	}
 	return string(result)
 }
