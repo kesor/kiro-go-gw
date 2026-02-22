@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -417,31 +416,16 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 				"userInputMessage": map[string]interface{}{
 					"content": "Hi",
 					"modelId": "claude-haiku-4.5",
-					"origin":  "AI_EDITOR",
+					"origin":  "KIRO_CLI",
 				},
 			},
 		},
 	}
 
-	jsonData, err := json.Marshal(payload)
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
 	if err != nil {
-		t.Fatalf("Failed to marshal payload: %v", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
-	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
-	req.Header.Set("x-amzn-codewhisperer-optout", "false")
-	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
-
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP request failed: %v", err)
+		t.Fatalf("DoRequest failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -569,28 +553,10 @@ func TestKiroClientWithRealCredentials_SimpleWithConverter(t *testing.T) {
 	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
 	t.Logf("Payload: %s", payloadJSON)
 
-	// Make the request
-	chatURL := authManager.APIHost() + "/generateAssistantResponse"
-	jsonData, err := json.Marshal(payload)
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
 	if err != nil {
-		t.Fatalf("Failed to marshal payload: %v", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
-	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
-	req.Header.Set("x-amzn-codewhisperer-optout", "false")
-	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
-
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP request failed: %v", err)
+		t.Fatalf("DoRequest failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -698,28 +664,10 @@ func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
 	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
 	t.Logf("Payload: %s", payloadJSON)
 
-	// Make the request
-	chatURL := authManager.APIHost() + "/generateAssistantResponse"
-	jsonData, err := json.Marshal(payload)
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
 	if err != nil {
-		t.Fatalf("Failed to marshal payload: %v", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
-	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
-	req.Header.Set("x-amzn-codewhisperer-optout", "false")
-	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
-
-	httpClient := &http.Client{Timeout: 120 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP request failed: %v", err)
+		t.Fatalf("DoRequest failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -835,28 +783,10 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 	t.Logf("Built payload with conversationId: %s", conversationID)
 	t.Logf("Image URL: %s", imageURL)
 
-	// Make the request
-	chatURL := authManager.APIHost() + "/generateAssistantResponse"
-	jsonData, err := json.Marshal(payload)
+	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
+	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
 	if err != nil {
-		t.Fatalf("Failed to marshal payload: %v", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
-	req.Header.Set("User-Agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 md/appVersion-1.25.1 app/AmazonQ-For-CLI")
-	req.Header.Set("x-amz-user-agent", "aws-sdk-rust/1.3.11 ua/2.1 api/codewhispererstreaming/0.1.13922 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI")
-	req.Header.Set("x-amzn-codewhisperer-optout", "false")
-	req.Header.Set("x-amz-target", "AmazonCodeWhispererStreamingService.GenerateAssistantResponse")
-
-	httpClient := &http.Client{Timeout: 120 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		t.Fatalf("HTTP request failed: %v", err)
+		t.Fatalf("DoRequest failed: %v", err)
 	}
 	defer resp.Body.Close()
 
