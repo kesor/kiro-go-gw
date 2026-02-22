@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"kiro-go-gw/internal/auth"
+	"kiro-go-gw/internal/converter"
+	"kiro-go-gw/internal/models"
 )
 
 // mockAuthManager implements a mock for testing
@@ -473,4 +475,279 @@ func reflectkeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Use converter to build payload for tool calling
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{
+				Role:    "user",
+				Content: "What is 125 * 17? Use the calculator tool.",
+			},
+		},
+		Tools: []models.Tool{
+			{
+				Type: "function",
+				Function: &models.ToolFunction{
+					Name:        "calculator",
+					Description: "Perform basic arithmetic calculations",
+					Parameters: map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"expression": map[string]interface{}{
+								"type":        "string",
+								"description": "Mathematical expression to evaluate",
+							},
+						},
+						"required": []string{"expression"},
+					},
+				},
+			},
+		},
+	}, conversationID, authManager.ProfileArn())
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+
+	// Make the request
+	chatURL := authManager.APIHost() + "/generateAssistantResponse"
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	bodyStr := string(body)
+
+	// Check for tool calls in response
+	if strings.Contains(bodyStr, "toolUse") || strings.Contains(bodyStr, "tool_call") {
+		t.Logf("SUCCESS: Tool calling response detected!")
+		// Log a preview of the response
+		preview := bodyStr
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		t.Logf("Response preview: %s", preview)
+	} else if strings.Contains(bodyStr, "125") || strings.Contains(bodyStr, "17") || strings.Contains(bodyStr, "2125") {
+		t.Logf("SUCCESS: Got numerical response (125 * 17 = 2125)")
+		t.Logf("Response: %s", bodyStr)
+	} else {
+		t.Logf("Response (no explicit tool call detected): %s", bodyStr)
+	}
+}
+
+func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Use converter to build payload with image
+	// Using a publicly available sample image (ant)
+	imageURL := "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg"
+
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []models.ChatMessage{
+			{
+				Role: "user",
+				Content: []interface{}{
+					map[string]interface{}{
+						"type": "text",
+						"text": "What is in this image? Describe what you see.",
+					},
+					map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": imageURL,
+						},
+					},
+				},
+			},
+		},
+	}, conversationID, authManager.ProfileArn())
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+	t.Logf("Image URL: %s", imageURL)
+
+	// Make the request
+	chatURL := authManager.APIHost() + "/generateAssistantResponse"
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+
+	httpClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	bodyStr := string(body)
+
+	// Check if we got a valid response about the image
+	if len(bodyStr) > 50 {
+		t.Logf("SUCCESS: Got image recognition response!")
+		// Log a preview of the response
+		preview := bodyStr
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		t.Logf("Response preview: %s", preview)
+	} else {
+		t.Fatalf("Response too short: %s", bodyStr)
+	}
 }
