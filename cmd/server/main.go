@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,11 +10,19 @@ import (
 	"kiro-go-gw/internal/server"
 )
 
+var version = "dev"
+
 func main() {
-	// Load config
+	showVersion := flag.Bool("version", false, "Show version information")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("Kiro Gateway %s\n", version)
+		os.Exit(0)
+	}
+
 	cfg := config.Load()
 
-	// Validate credentials
 	hasCreds := cfg.RefreshToken != "" || cfg.CredsFile != "" || cfg.CliDbFile != ""
 	if !hasCreds {
 		fmt.Fprintf(os.Stderr, "Error: No Kiro credentials configured.\n")
@@ -22,14 +31,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create and start server
 	srv, err := server.New(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
-	log.Printf("Starting Kiro Gateway on %s", addr)
+	log.Printf("Starting Kiro Gateway %s on %s", version, addr)
 
 	if err := srv.Start(addr); err != nil {
 		log.Fatal(err)
