@@ -15,22 +15,7 @@
       "original": {
         "owner": "numtide",
         "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "kiro-go-gw-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1771771762,
-        "narHash": "sha256-BxIBfCfEIRzmYr0mVrRC9u6RxNyjIxOqICcjcyKfJds=",
-        "owner": "kesor",
-        "repo": "kiro-go-gw",
-        "rev": "dec407232e18a212c250b3ce952ffe0e0be23ef6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "kesor",
-        "repo": "kiro-go-gw",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
         "type": "github"
       }
     },
@@ -53,7 +38,6 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "kiro-go-gw-src": "kiro-go-gw-src",
         "nixpkgs": "nixpkgs"
       }
     },
