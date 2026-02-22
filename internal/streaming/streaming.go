@@ -255,7 +255,7 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 			if err != nil {
 				errorCount++
 				if errorCount > maxErrors {
-					ch <- fmt.Sprintf(`data: {"error":"stream decode error limit exceeded: %v"}`+"\n\n", err)
+					ch <- fmt.Sprintf(`data: {"error":%s}`+"\n\n", escapeJSON("stream decode error limit exceeded: "+err.Error()))
 					return
 				}
 				continue
