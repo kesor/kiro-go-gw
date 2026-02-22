@@ -66,12 +66,23 @@ func TestBuildKiroPayload_Basic(t *testing.T) {
 		t.Fatalf("content has unexpected type: %T", userInputMsg["content"])
 	}
 
-	// Check history contains previous messages (all messages for now)
+	// Check history contains previous messages
 	history, ok := convState["history"].([]map[string]interface{})
 	if !ok {
-		t.Logf("history: not found or wrong type")
-	} else if len(history) > 0 {
-		t.Logf("history has %d messages", len(history))
+		t.Fatalf("history has unexpected type: %T", convState["history"])
+	}
+	if len(history) != 1 {
+		t.Fatalf("history length: got %d, want 1", len(history))
+	}
+	firstHistoryMsg := history[0]
+	if assistantMsg, ok := firstHistoryMsg["assistantResponseMessage"]; ok {
+		if am, ok := assistantMsg.(map[string]interface{}); ok {
+			if content, ok := am["content"].(string); ok {
+				if content != "Hi there!" {
+					t.Errorf("history[0].content: got %v, want Hi there!", content)
+				}
+			}
+		}
 	}
 }
 
@@ -277,10 +288,27 @@ func TestBuildKiroPayload_ToolCalls(t *testing.T) {
 					case []interface{}:
 						if len(tu) > 0 {
 							foundToolUses = true
+							// Verify tool use structure
+							if len(tu) > 0 {
+								if tu0, ok := tu[0].(map[string]interface{}); ok {
+									if tu0["toolUseId"] != "call_abc123" {
+										t.Errorf("toolUseId: got %v, want call_abc123", tu0["toolUseId"])
+									}
+									if tu0["name"] != "calculator" {
+										t.Errorf("tool name: got %v, want calculator", tu0["name"])
+									}
+								}
+							}
 						}
 					case []map[string]interface{}:
 						if len(tu) > 0 {
 							foundToolUses = true
+							if tu[0]["toolUseId"] != "call_abc123" {
+								t.Errorf("toolUseId: got %v, want call_abc123", tu[0]["toolUseId"])
+							}
+							if tu[0]["name"] != "calculator" {
+								t.Errorf("tool name: got %v, want calculator", tu[0]["name"])
+							}
 						}
 					}
 				}
@@ -371,6 +399,16 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 									if trm, ok := trItem.(map[string]interface{}); ok {
 										if trm["toolUseId"] == "call_abc123" {
 											foundToolResult = true
+											// Verify tool result content
+											if content, ok := trm["content"].([]interface{}); ok {
+												if len(content) > 0 {
+													if textBlock, ok := content[0].(map[string]interface{}); ok {
+														if textBlock["text"] != "Result: 4" {
+															t.Errorf("tool result text: got %v, want Result: 4", textBlock["text"])
+														}
+													}
+												}
+											}
 											break
 										}
 									}
@@ -379,6 +417,14 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 								for _, trItem := range tr {
 									if trItem["toolUseId"] == "call_abc123" {
 										foundToolResult = true
+										// Verify tool result content
+										if content, ok := trItem["content"].([]map[string]interface{}); ok {
+											if len(content) > 0 {
+												if content[0]["text"] != "Result: 4" {
+													t.Errorf("tool result text: got %v, want Result: 4", content[0]["text"])
+												}
+											}
+										}
 										break
 									}
 								}
