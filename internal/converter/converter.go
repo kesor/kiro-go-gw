@@ -90,10 +90,8 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 
 	// Build conversationState structure (Kiro's native format)
 	conversationState := map[string]interface{}{
-		"chatTriggerType":     "MANUAL",
-		"conversationId":      conversationID,
-		"agentContinuationId": generateAgentContinuationId(),
-		"agentTaskType":       "vibe",
+		"chatTriggerType": "MANUAL",
+		"conversationId":  conversationID,
 		"currentMessage": map[string]interface{}{
 			"userInputMessage": userInputMessage,
 		},
@@ -130,7 +128,9 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		payload["topP"] = req.TopP
 	}
 
-	payload["enableStreaming"] = req.Stream
+	if req.Stream {
+		payload["enableStreaming"] = true
+	}
 
 	return payload, nil
 }
