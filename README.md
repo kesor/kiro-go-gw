@@ -45,10 +45,10 @@ Set these environment variables:
 
 ### Client Authentication
 
-All API requests (except health check) require the `Authorization` header with the value set to the `PROXY_API_KEY` environment variable:
+All `/v1/*` API requests require the `Authorization` header with the value set to the `Bearer <PROXY_API_KEY>` environment variable. The root (`/`) and health check (`/health`) endpoints are public and do not require authentication:
 
 ```bash
-curl -H "Authorization: Bearer ${PROXY_API_KEY}" ...
+curl -H "Authorization: Bearer <PROXY_API_KEY>" ...
 ```
 
 The server validates this header and rejects requests with a `401 Unauthorized` error if it doesn't match.
