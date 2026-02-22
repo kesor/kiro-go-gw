@@ -78,12 +78,10 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		userInputMessageContext["tools"] = tools
 	}
 
-	// Add image metadata to the user input.
-	// URLs are added as textual "Image: <url>" references in the prompt text,
-	// and any inlined image bytes are attached in the `images` slice for downstream handling.
-	var images []map[string]interface{}
+	// Add image references to the user input content.
+	// Kiro handles images by having the model request the fs_read tool with image_paths.
+	// We just include the file path/URL as text reference.
 	if len(userImages) > 0 {
-		// Convert image URLs to human-readable text references and record any embedded image data.
 		imageRefs := ""
 		for _, img := range userImages {
 			source := img["source"].(map[string]interface{})
@@ -91,9 +89,8 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 			if url, ok := source["url"].(string); ok {
 				imageRefs += "Image: " + url + "\n"
 			}
-			// Check for embedded bytes (from data URLs)
+			// For base64 data URLs, include as text reference
 			if bytesVal, ok := source["bytes"].(string); ok && bytesVal != "" {
-				images = append(images, img)
 				imageRefs += "[Image data included]\n"
 			}
 		}
@@ -107,11 +104,6 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		"modelId":                 normalizeModelName(req.Model),
 		"origin":                  "KIRO_CLI",
 		"userInputMessageContext": userInputMessageContext,
-	}
-
-	// Add images to userInputMessage if we have any
-	if len(images) > 0 {
-		userInputMessage["images"] = images
 	}
 
 	// Build conversationState structure (Kiro's native format)

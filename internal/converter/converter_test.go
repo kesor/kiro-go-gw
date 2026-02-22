@@ -945,30 +945,9 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 		t.Errorf("content should contain original text, got %q", content)
 	}
 
-	// Images should be in the images field
-	images, ok := userInputMsg["images"].([]map[string]interface{})
-	if !ok {
-		t.Fatal("images not found in userInputMessage")
-	}
-	if len(images) != 1 {
-		t.Fatalf("expected 1 image, got %d", len(images))
-	}
-
-	// Verify that the image payload is correctly populated
-	image := images[0]
-	format, ok := image["format"].(string)
-	if !ok || format == "" {
-		t.Fatalf("image format not set correctly, got %v", image["format"])
-	}
-
-	source, ok := image["source"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("image source not set correctly, got %T", image["source"])
-	}
-
-	bytesVal, ok := source["bytes"].(string)
-	if !ok || bytesVal == "" {
-		t.Fatalf("image source.bytes not set or empty, got %v", source["bytes"])
+	// Kiro handles images via fs_read tool - no images field in request
+	if _, hasImages := userInputMsg["images"]; hasImages {
+		t.Error("images field should not be present - Kiro handles images via fs_read tool")
 	}
 }
 

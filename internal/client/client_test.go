@@ -406,20 +406,16 @@ func TestKiroClientWithRealCredentials(t *testing.T) {
 	chatURL := authManager.APIHost() + "/generateAssistantResponse"
 	t.Logf("Making request to: %s", chatURL)
 
-	// Test with a simple chat completion request (using Kiro's native format)
-	// This matches what Python's build_kiro_payload creates
-	payload := map[string]interface{}{
-		"conversationState": map[string]interface{}{
-			"chatTriggerType": "MANUAL",
-			"conversationId":  "conv-" + strings.Repeat("x", 32),
-			"currentMessage": map[string]interface{}{
-				"userInputMessage": map[string]interface{}{
-					"content": "Hi",
-					"modelId": "claude-haiku-4.5",
-					"origin":  "KIRO_CLI",
-				},
-			},
+	// Use the converter to build the payload (same as the gateway does)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-haiku-4.5",
+		Messages: []models.ChatMessage{
+			{Role: "user", Content: "Hi"},
 		},
+	}, "conv-"+strings.Repeat("x", 32), "")
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
 	}
 
 	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
