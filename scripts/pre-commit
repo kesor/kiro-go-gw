@@ -57,3 +57,8 @@ if [ -n "$(git diff --stat go.mod go.sum)" ]; then
     git diff go.mod go.sum
     exit 1
 fi
+
+if [ -f flake.nix ] && command -v nix &> /dev/null; then
+    echo "Running nix flake check..."
+    nix flake check
+fi

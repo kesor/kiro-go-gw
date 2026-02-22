@@ -15,8 +15,6 @@ buildGoModule {
   pname = "kiro-go-gw";
   inherit version;
 
-  CGO_ENABLED = lib.mkDefault 1;
-
   ldflags = [
     "-X main.version=${version}"
   ];
