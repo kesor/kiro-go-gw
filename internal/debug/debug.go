@@ -94,7 +94,7 @@ func Enabled() bool {
 }
 
 func LogRequest(source EventSource, method, url string, headers http.Header, body []byte, duration int64) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
@@ -112,7 +112,7 @@ func LogRequest(source EventSource, method, url string, headers http.Header, bod
 }
 
 func LogResponse(source EventSource, method, url string, status int, headers http.Header, body []byte, duration int64) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
@@ -131,7 +131,7 @@ func LogResponse(source EventSource, method, url string, status int, headers htt
 }
 
 func LogAuth(event, message, errorMsg string, meta map[string]string) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
