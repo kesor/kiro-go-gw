@@ -477,6 +477,116 @@ func reflectkeys(m map[string]interface{}) []string {
 	return keys
 }
 
+func TestKiroClientWithRealCredentials_SimpleWithConverter(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Get token
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Use converter to build payload for simple message
+	conversationID := "conv-" + strings.Repeat("x", 32)
+	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
+		Model: "claude-haiku-4.5",
+		Messages: []models.ChatMessage{
+			{
+				Role:    "user",
+				Content: "Hi",
+			},
+		},
+	}, conversationID, authManager.ProfileArn())
+
+	if err != nil {
+		t.Fatalf("BuildKiroPayload failed: %v", err)
+	}
+
+	t.Logf("Built payload with conversationId: %s", conversationID)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
+
+	// Make the request
+	chatURL := authManager.APIHost() + "/generateAssistantResponse"
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	t.Logf("SUCCESS: Simple message with converter works!")
+}
+
 func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
 	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
 		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
@@ -529,7 +639,7 @@ func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
 	// Use converter to build payload for tool calling
 	conversationID := "conv-" + strings.Repeat("x", 32)
 	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
-		Model: "claude-sonnet-4.5",
+		Model: "claude-haiku-4.5",
 		Messages: []models.ChatMessage{
 			{
 				Role:    "user",
@@ -562,6 +672,10 @@ func TestKiroClientWithRealCredentials_ToolCalling(t *testing.T) {
 	}
 
 	t.Logf("Built payload with conversationId: %s", conversationID)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
 
 	// Make the request
 	chatURL := authManager.APIHost() + "/generateAssistantResponse"
@@ -673,7 +787,7 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 
 	conversationID := "conv-" + strings.Repeat("x", 32)
 	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
-		Model: "claude-sonnet-4.5",
+		Model: "claude-haiku-4.5",
 		Messages: []models.ChatMessage{
 			{
 				Role: "user",

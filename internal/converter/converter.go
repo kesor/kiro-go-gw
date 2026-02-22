@@ -66,16 +66,35 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		_, history = convertMessages(req.Messages[:lastUserMsgIndex])
 	}
 
+	// Extract text content and images from the last user message
+	userTextContent := extractTextContent(req.Messages[lastUserMsgIndex].Content)
+	userImages := extractImages(req.Messages[lastUserMsgIndex].Content)
+
+	// Build userInputMessage (following Python converter format)
+	userInputMessage := map[string]interface{}{
+		"content": userTextContent,
+		"modelId": normalizeModelName(req.Model),
+		"origin":  "AI_EDITOR",
+	}
+
+	// Add images if present (separate field)
+	if len(userImages) > 0 {
+		userInputMessage["images"] = userImages
+	}
+
+	// Add tools to userInputMessageContext
+	if tools != nil {
+		userInputMessage["userInputMessageContext"] = map[string]interface{}{
+			"tools": tools,
+		}
+	}
+
 	// Build conversationState structure (Kiro's native format)
 	conversationState := map[string]interface{}{
 		"chatTriggerType": "MANUAL",
 		"conversationId":  conversationID,
 		"currentMessage": map[string]interface{}{
-			"userInputMessage": map[string]interface{}{
-				"content": userContentBlocks,
-				"modelId": normalizeModelName(req.Model),
-				"origin":  "AI_EDITOR",
-			},
+			"userInputMessage": userInputMessage,
 		},
 	}
 
@@ -98,9 +117,7 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		payload["systemPrompt"] = systemPrompt
 	}
 
-	if tools != nil {
-		payload["toolDefinitions"] = tools
-	}
+	// Tools are now in userInputMessageContext, not at top level
 
 	if req.MaxTokens > 0 {
 		payload["maxTokens"] = req.MaxTokens

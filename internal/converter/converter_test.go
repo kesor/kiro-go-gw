@@ -52,13 +52,18 @@ func TestBuildKiroPayload_Basic(t *testing.T) {
 	if userInputMsg["origin"] != "AI_EDITOR" {
 		t.Errorf("origin: got %v, want AI_EDITOR", userInputMsg["origin"])
 	}
-	// Content is now an array of content blocks
-	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
-	if !ok {
-		t.Fatal("content is not an array of content blocks")
-	}
-	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Hello" {
-		t.Errorf("content: got %v, want [{text: Hello}]", contentBlocks)
+	// Content can be string or array of content blocks
+	switch content := userInputMsg["content"].(type) {
+	case string:
+		if content != "Hello" {
+			t.Errorf("content: got %v, want Hello", content)
+		}
+	case []map[string]interface{}:
+		if len(content) != 1 || content[0]["text"] != "Hello" {
+			t.Errorf("content: got %v, want [{text: Hello}]", content)
+		}
+	default:
+		t.Fatalf("content has unexpected type: %T", userInputMsg["content"])
 	}
 
 	// Check history contains previous messages (all messages for now)
@@ -140,17 +145,26 @@ func TestBuildKiroPayload_Tools(t *testing.T) {
 		t.Fatalf("BuildKiroPayload failed: %v", err)
 	}
 
-	tools := payload["toolDefinitions"]
-	if tools == nil {
-		t.Fatal("toolDefinitions is nil")
+	// Tools should be in userInputMessageContext
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	ctx, ok := userInputMsg["userInputMessageContext"].(map[string]interface{})
+	if !ok {
+		t.Fatal("userInputMessageContext not found")
 	}
 
-	toolList := tools.([]map[string]interface{})
-	if len(toolList) != 1 {
-		t.Errorf("tool count: got %d, want 1", len(toolList))
+	tools, ok := ctx["tools"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("tools not found in userInputMessageContext")
 	}
 
-	toolSpec := toolList[0]["toolSpec"].(map[string]interface{})
+	if len(tools) != 1 {
+		t.Errorf("tool count: got %d, want 1", len(tools))
+	}
+
+	toolSpec := tools[0]["toolSpec"].(map[string]interface{})
 	if toolSpec["name"] != "calculator" {
 		t.Errorf("tool name: got %v, want calculator", toolSpec["name"])
 	}
@@ -178,7 +192,13 @@ func TestBuildKiroPayload_ToolsFlatFormat(t *testing.T) {
 		t.Fatalf("BuildKiroPayload failed: %v", err)
 	}
 
-	tools := payload["toolDefinitions"].([]map[string]interface{})
+	// Tools should be in userInputMessageContext
+	convState := payload["conversationState"].(map[string]interface{})
+	currentMsg := convState["currentMessage"].(map[string]interface{})
+	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
+
+	ctx := userInputMsg["userInputMessageContext"].(map[string]interface{})
+	tools := ctx["tools"].([]map[string]interface{})
 	toolSpec := tools[0]["toolSpec"].(map[string]interface{})
 
 	if toolSpec["name"] != "my_tool" {
@@ -233,13 +253,13 @@ func TestBuildKiroPayload_ToolCalls(t *testing.T) {
 	if !ok {
 		t.Fatal("userInputMessage not found")
 	}
-	// Content is now an array of content blocks
-	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	// Content is now a string
+	content, ok := userInputMsg["content"].(string)
 	if !ok {
-		t.Fatal("content is not an array of content blocks")
+		t.Fatal("content is not a string")
 	}
-	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Calculate 2+2" {
-		t.Errorf("content: got %v, want [{text: Calculate 2+2}]", contentBlocks)
+	if content != "Calculate 2+2" {
+		t.Errorf("content: got %v, want 'Calculate 2+2'", content)
 	}
 
 	// Check history contains the assistant message with tool calls
@@ -320,13 +340,13 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 	if !ok {
 		t.Fatal("userInputMessage not found")
 	}
-	// Content is now an array of content blocks
-	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	// Content is now a string
+	content, ok := userInputMsg["content"].(string)
 	if !ok {
-		t.Fatal("content is not an array of content blocks")
+		t.Fatal("content is not a string")
 	}
-	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Thanks" {
-		t.Errorf("content: got %v, want [{text: Thanks}]", contentBlocks)
+	if content != "Thanks" {
+		t.Errorf("content: got %v, want 'Thanks'", content)
 	}
 
 	// Check history contains tool result
@@ -609,13 +629,13 @@ func TestBuildKiroPayload_MultiTurnConversation(t *testing.T) {
 		t.Fatal("userInputMessage not found")
 	}
 
-	// Content is now an array of content blocks
-	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	// Content is now a string
+	content, ok := userInputMsg["content"].(string)
 	if !ok {
-		t.Fatal("content is not an array of content blocks")
+		t.Fatal("content is not a string")
 	}
-	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Second question" {
-		t.Errorf("currentMessage content: got %v, want [{text: Second question}]", contentBlocks)
+	if content != "Second question" {
+		t.Errorf("currentMessage content: got %v, want 'Second question'", content)
 	}
 
 	// History should have the previous messages
@@ -730,21 +750,26 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 	currentMsg := convState["currentMessage"].(map[string]interface{})
 	userInputMsg := currentMsg["userInputMessage"].(map[string]interface{})
 
-	contentBlocks, ok := userInputMsg["content"].([]map[string]interface{})
+	// Content is now a string
+	content, ok := userInputMsg["content"].(string)
 	if !ok {
-		t.Fatal("content is not an array of content blocks")
+		t.Fatal("content is not a string")
+	}
+	if content != "What's in this image?" {
+		t.Errorf("content: got %q, want %q", content, "What's in this image?")
 	}
 
-	if len(contentBlocks) != 2 {
-		t.Fatalf("expected 2 content blocks (text + image), got %d", len(contentBlocks))
+	// Images should be in separate "images" field
+	images, ok := userInputMsg["images"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("images not found in userInputMessage")
 	}
 
-	textBlock := contentBlocks[0]
-	if textBlock["type"] != "text" || textBlock["text"] != "What's in this image?" {
-		t.Errorf("text block: got %v", textBlock)
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
 	}
 
-	imageBlock := contentBlocks[1]
+	imageBlock := images[0]
 	if imageBlock["type"] != "image" {
 		t.Errorf("image block type: got %v", imageBlock["type"])
 	}
