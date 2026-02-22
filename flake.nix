@@ -29,6 +29,7 @@
           subPackages = [ "cmd/server" ];
           buildInputs = [ pkgs.sqlite ];
           nativeBuildInputs = [ pkgs.pkg-config ];
+          CGO_ENABLED = 1;
         };
 
         packages.default = self.packages.${system}.kiro-go-gw;
