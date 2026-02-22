@@ -43,6 +43,16 @@ Set these environment variables:
 
 > **Important**: You must set a strong, unique `PROXY_API_KEY` before running the server.
 
+### Client Authentication
+
+All `/v1/*` API requests require the `Authorization` header with the value set to the `Bearer <PROXY_API_KEY>` environment variable. The root (`/`) and health check (`/health`) endpoints are public and do not require authentication:
+
+```bash
+curl -H "Authorization: Bearer <PROXY_API_KEY>" ...
+```
+
+The server validates this header and rejects requests with a `401 Unauthorized` error if it doesn't match.
+
 ### Debug Mode
 
 When `DEBUG=true`, the server logs all HTTP traffic and authentication events in JSON format:
