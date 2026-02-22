@@ -183,7 +183,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request
 	var req models.ChatCompletionRequest
-	bodyBytes, _ := io.ReadAll(r.Body)
+	maxBodySize := int64(10 * 1024 * 1024) // 10MB limit
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxBodySize))
+	if err != nil {
+		http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		debug.LogRequest(debug.EventSourceGateway, r.Method, r.URL.String(), r.Header, bodyBytes, time.Since(startTime).Milliseconds())
@@ -323,7 +328,7 @@ func Run() {
 	cfg := config.Load()
 
 	// Initialize debug logger
-	debug.Init(cfg.Debug, cfg.DebugLogFile)
+	_ = debug.Init(cfg.Debug, cfg.DebugLogFile)
 
 	// Create server
 	srv, err := New(cfg)

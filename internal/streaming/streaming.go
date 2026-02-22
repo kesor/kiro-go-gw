@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"kiro-go-gw/internal/models"
 )
 
@@ -238,13 +239,13 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 
 	go func() {
 		defer close(ch)
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 0), 1024*1024) // 1MB max token size
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		// Use AWS event stream decoder
+		decoder := eventstream.NewDecoder()
+		payloadBuf := make([]byte, 0, 1024)
 
-			output, err := handler.ParseAndConvert(line)
+		for {
+			msg, err := decoder.Decode(reader, payloadBuf)
 			if err == io.EOF {
 				ch <- "data: [DONE]\n\n"
 				break
@@ -252,12 +253,58 @@ func StreamToOpenAI(reader io.Reader, model string) (<-chan string, error) {
 			if err != nil {
 				continue
 			}
-			if output != "" {
-				ch <- output
+
+			// Get event type from headers
+			eventType := ""
+			if h := msg.Headers.Get(":event-type"); h != nil {
+				if sv, ok := h.(eventstream.StringValue); ok {
+					eventType = string(sv)
+				}
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			ch <- "data: {\"error\":\"" + err.Error() + "\"}\n\n"
+
+			// Get content type
+			contentType := ""
+			if h := msg.Headers.Get(":content-type"); h != nil {
+				if sv, ok := h.(eventstream.StringValue); ok {
+					contentType = string(sv)
+				}
+			}
+
+			// Only process JSON content
+			if contentType != "application/json" {
+				continue
+			}
+
+			// Parse the JSON payload
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				continue
+			}
+
+			// Convert to OpenAI streaming format
+			switch eventType {
+			case "assistantResponseEvent":
+				if content, ok := payload["content"].(string); ok && content != "" {
+					// Send initial role on first content chunk
+					if handler.firstChunk {
+						roleChunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":"%s","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n",
+							handler.CompletionID(), handler.created, model)
+						ch <- roleChunk
+						handler.firstChunk = false
+					}
+					chunk := fmt.Sprintf(`data: {"id":"%s","object":"chat.completion.chunk","created":%d,"model":"%s","choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`+"\n\n",
+						handler.CompletionID(), handler.created, model, escapeJSON(content))
+					ch <- chunk
+				}
+			case "messageStopEvent":
+				// End of stream
+				ch <- "data: [DONE]\n\n"
+				return
+			case "metadataEvent":
+				// Could contain usage info - send final chunk
+				ch <- "data: [DONE]\n\n"
+				return
+			}
 		}
 	}()
 
@@ -270,54 +317,91 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 	var toolCalls []models.ToolCall
 	var finishReason string
 
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0), 1024*1024) // 1MB max token size
+	// Use AWS event stream decoder
+	decoder := eventstream.NewDecoder()
+	payloadBuf := make([]byte, 0, 1024)
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		output, err := handler.ParseAndConvert(line)
+	for {
+		msg, err := decoder.Decode(reader, payloadBuf)
 		if err == io.EOF {
-			finishReason = "stop"
+			if finishReason == "" {
+				finishReason = "stop"
+			}
 			break
 		}
 		if err != nil {
+			// If it's not an EOF, try to continue
 			continue
 		}
 
-		// Extract content from the chunk
-		if strings.HasPrefix(output, "data: ") {
-			data := strings.TrimPrefix(output, "data: ")
-			if data == "[DONE]" {
-				finishReason = "stop"
-				break
-			}
-
-			var chunk models.ChatCompletionChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-				if len(chunk.Choices) > 0 && chunk.Choices[0].Delta != nil {
-					if content, ok := chunk.Choices[0].Delta.Content.(string); ok {
-						fullContent.WriteString(content)
-					}
-					if len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-						toolCalls = chunk.Choices[0].Delta.ToolCalls
-					}
-				}
-				if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
-					finishReason = chunk.Choices[0].FinishReason
-				}
+		// Get event type from headers
+		eventType := ""
+		if h := msg.Headers.Get(":event-type"); h != nil {
+			if sv, ok := h.(eventstream.StringValue); ok {
+				eventType = string(sv)
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scanner error: %w", err)
+
+		// Get content type
+		contentType := ""
+		if h := msg.Headers.Get(":content-type"); h != nil {
+			if sv, ok := h.(eventstream.StringValue); ok {
+				contentType = string(sv)
+			}
+		}
+
+		// Only process JSON content
+		if contentType != "application/json" {
+			continue
+		}
+
+		// Parse the JSON payload
+		var payload map[string]interface{}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			continue
+		}
+
+		switch eventType {
+		case "assistantResponseEvent":
+			// Handle content
+			if content, ok := payload["content"].(string); ok {
+				fullContent.WriteString(content)
+			}
+		case "toolUseEvent":
+			// Tool use start
+			if name, ok := payload["name"].(string); ok {
+				toolCallID := ""
+				if id, ok := payload["toolUseId"].(string); ok {
+					toolCallID = id
+				}
+				inputStr := ""
+				if input, ok := payload["input"].(string); ok {
+					inputStr = input
+				} else if inputMap, ok := payload["input"].(map[string]interface{}); ok {
+					inputBytes, _ := json.Marshal(inputMap)
+					inputStr = string(inputBytes)
+				}
+				toolCalls = append(toolCalls, models.ToolCall{
+					ID:       toolCallID,
+					Type:     "function",
+					Function: &models.ToolCallFunction{Name: name, Arguments: inputStr},
+				})
+			}
+		case "messageStopEvent":
+			finishReason = "stop"
+		case "metadataEvent":
+			// Could contain usage info
+			if _, ok := payload["usage"]; ok {
+				finishReason = "stop"
+			}
+		}
 	}
 
 	resp := &models.ChatCompletionResponse{
 		ID:      handler.CompletionID(),
 		Object:  "chat.completion",
 		Created: handler.created,
-		Model:   handler.model,
+		Model:   model,
 		Choices: []models.Choice{
 			{
 				Index: 0,
@@ -332,9 +416,17 @@ func CollectResponse(reader io.Reader, model string) (*models.ChatCompletionResp
 
 	if len(toolCalls) > 0 {
 		resp.Choices[0].Message.ToolCalls = toolCalls
+		if resp.Choices[0].FinishReason == "" {
+			resp.Choices[0].FinishReason = "tool_calls"
+		}
 	}
 
 	return resp, nil
+}
+
+func escapeJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func generateCompletionID() string {

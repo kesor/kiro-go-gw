@@ -1,3 +1,4 @@
+// Package debug provides debug logging functionality for the Kiro gateway.
 package debug
 
 import (
@@ -22,7 +23,6 @@ type DebugLogger struct {
 
 var (
 	defaultLogger *DebugLogger
-	once          sync.Once
 )
 
 type EventType string
@@ -56,14 +56,10 @@ type Event struct {
 	Meta      map[string]string `json:"meta,omitempty"`
 }
 
-func Init(debug bool, logFile string) {
-	once.Do(func() {
+//go:noinline
+func Init(debug bool, logFile string) bool {
+	if debug {
 		defaultLogger = &DebugLogger{}
-
-		if !debug {
-			defaultLogger.logger = log.New(io.Discard, "", 0)
-			return
-		}
 
 		var output io.Writer = os.Stdout
 		if logFile != "" {
@@ -77,7 +73,11 @@ func Init(debug bool, logFile string) {
 		}
 
 		defaultLogger.logger = log.New(output, "", 0)
-	})
+	} else {
+		defaultLogger = &DebugLogger{}
+		defaultLogger.logger = log.New(io.Discard, "", 0)
+	}
+	return debug
 }
 
 func Close() {

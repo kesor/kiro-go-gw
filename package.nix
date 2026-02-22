@@ -4,7 +4,7 @@
   src,
   vendorHash,
   sqlite,
-  pkg-config,
+  pkgs,
 }:
 
 let
@@ -21,5 +21,5 @@ buildGoModule {
 
   subPackages = [ "cmd/server" ];
   buildInputs = [ sqlite ];
-  nativeBuildInputs = [ pkg-config ];
+  nativeBuildInputs = [ pkgs.pkg-config ];
 }
