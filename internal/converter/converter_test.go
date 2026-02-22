@@ -950,16 +950,15 @@ func TestBuildKiroPayload_WithImages(t *testing.T) {
 	}
 
 	imageBlock := images[0]
-	if imageBlock["type"] != "image" {
-		t.Errorf("image block type: got %v", imageBlock["type"])
+	// New format uses "format" instead of "type"
+	if imageBlock["format"] != "png" {
+		t.Errorf("image format: got %v, want png", imageBlock["format"])
 	}
 	source, ok := imageBlock["source"].(map[string]interface{})
 	if !ok {
 		t.Fatal("image source not found")
 	}
-	if source["type"] != "url" {
-		t.Errorf("image source type: got %v", source["type"])
-	}
+	// New format uses "bytes" or "url"
 	if source["url"] != "https://example.com/image.png" {
 		t.Errorf("image url: got %v", source["url"])
 	}

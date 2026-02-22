@@ -2,8 +2,11 @@ package converter
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 
@@ -465,24 +468,35 @@ func extractImages(content interface{}) []map[string]interface{} {
 				if block["type"] == "image_url" {
 					if imgURL, ok := block["image_url"].(map[string]interface{}); ok {
 						if url, ok := imgURL["url"].(string); ok {
-							// Handle data URL
+							// Handle data URL (already base64 encoded)
 							if strings.HasPrefix(url, "data:image") {
+								mediaType := extractMediaType(url)
+								format := strings.TrimPrefix(mediaType, "image/")
 								images = append(images, map[string]interface{}{
-									"type": "image",
+									"format": format,
 									"source": map[string]interface{}{
-										"type":      "base64",
-										"mediaType": extractMediaType(url),
-										"data":      extractBase64Data(url),
+										"bytes": extractBase64Data(url),
 									},
 								})
 							} else {
-								images = append(images, map[string]interface{}{
-									"type": "image",
-									"source": map[string]interface{}{
-										"type": "url",
-										"url":  url,
-									},
-								})
+								// Try to fetch URL and convert to base64
+								if data, err := fetchImageAsBase64(url); err == nil {
+									format := detectImageFormat(data)
+									images = append(images, map[string]interface{}{
+										"format": format,
+										"source": map[string]interface{}{
+											"bytes": data,
+										},
+									})
+								} else {
+									// Fallback: include as URL reference (legacy format)
+									images = append(images, map[string]interface{}{
+										"format": "png",
+										"source": map[string]interface{}{
+											"url": url,
+										},
+									})
+								}
 							}
 						}
 					}
@@ -492,6 +506,48 @@ func extractImages(content interface{}) []map[string]interface{} {
 	}
 
 	return images
+}
+
+func fetchImageAsBase64(imageURL string) (string, error) {
+	resp, err := http.Get(imageURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch image: %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+func detectImageFormat(data string) string {
+	// Simple format detection based on base64 header
+	decoded, err := base64.StdEncoding.DecodeString(data[:100])
+	if err != nil {
+		return "png"
+	}
+	if len(decoded) >= 4 {
+		if decoded[0] == 0xFF && decoded[1] == 0xD8 {
+			return "jpeg"
+		}
+		if decoded[0] == 0x89 && string(decoded[:4]) == "PNG" {
+			return "png"
+		}
+		if decoded[0] == 0x47 && decoded[1] == 0x49 {
+			return "gif"
+		}
+		if decoded[0] == 0x52 && string(decoded[:4]) == "RIFF" {
+			return "webp"
+		}
+	}
+	return "png"
 }
 
 func extractMediaType(dataURL string) string {

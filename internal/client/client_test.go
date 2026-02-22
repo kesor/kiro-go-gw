@@ -750,13 +750,16 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 	}
 	t.Logf("Got access token, length: %d", len(token))
 
+	// Use profileArn from auth
+	profileArn := authManager.ProfileArn()
+
 	// Use converter to build payload with image
-	// Using a publicly available sample image (ant)
-	imageURL := "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Camponotus_flavomarginatus_ant.jpg/640px-Camponotus_flavomarginatus_ant.jpg"
+	// Using a small valid PNG as data URL to avoid network issues in test
+	imageURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9QzwAEjDAGNzYQBxkHADPvBQcR6QmoAAAAAElFTkSuQmCC"
 
 	conversationID := "conv-" + strings.Repeat("x", 32)
 	payload, err := converter.BuildKiroPayload(&models.ChatCompletionRequest{
-		Model: "claude-haiku-4.5",
+		Model: "auto",
 		Messages: []models.ChatMessage{
 			{
 				Role: "user",
@@ -774,7 +777,7 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 				},
 			},
 		},
-	}, conversationID, authManager.ProfileArn())
+	}, conversationID, profileArn)
 
 	if err != nil {
 		t.Fatalf("BuildKiroPayload failed: %v", err)
@@ -782,6 +785,10 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 
 	t.Logf("Built payload with conversationId: %s", conversationID)
 	t.Logf("Image URL: %s", imageURL)
+
+	// Debug: print the payload
+	payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+	t.Logf("Payload: %s", payloadJSON)
 
 	// Use DoRequest to make the API call (handles auth headers, retries, etc.)
 	resp, err := client.DoRequest(ctx, "POST", authManager.APIHost()+"/generateAssistantResponse", payload, false)
