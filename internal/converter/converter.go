@@ -12,18 +12,41 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	systemPrompt, messages := convertMessages(req.Messages)
 	tools := convertTools(req.Tools)
 
-	// Determine profileArn for payload
-	profileArnForPayload := ""
-	if profileArn != "" {
-		profileArnForPayload = profileArn
+	// Build userInputMessage from the last user message
+	var userContent string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			userContent = extractTextContent(req.Messages[i].Content)
+			break
+		}
 	}
 
-	payload := map[string]interface{}{
+	// Build conversationState structure (Kiro's native format)
+	conversationState := map[string]interface{}{
+		"chatTriggerType": "MANUAL",
 		"conversationId":  conversationID,
-		"messages":        messages,
-		"profileArn":      profileArnForPayload,
-		"modelId":         normalizeModelName(req.Model),
-		"enableStreaming": req.Stream,
+		"currentMessage": map[string]interface{}{
+			"userInputMessage": map[string]interface{}{
+				"content": userContent,
+				"modelId": normalizeModelName(req.Model),
+				"origin":  "AI_EDITOR",
+			},
+		},
+	}
+
+	// Add history if there are previous messages
+	if len(messages) > 0 {
+		conversationState["history"] = messages
+	}
+
+	// Build payload
+	payload := map[string]interface{}{
+		"conversationState": conversationState,
+	}
+
+	// Add profileArn only if provided (not needed for AWS SSO)
+	if profileArn != "" {
+		payload["profileArn"] = profileArn
 	}
 
 	if systemPrompt != "" {
