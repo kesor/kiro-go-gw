@@ -4,12 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    kiro-go-gw-src.url = "github:kesor/kiro-go-gw";
+    kiro-go-gw-src.src = ./.;
     kiro-go-gw-src.flake = false;
   };
 
   outputs =
-    inputs@{
+    {
       self,
       nixpkgs,
       flake-utils,
