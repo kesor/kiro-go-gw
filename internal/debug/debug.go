@@ -16,6 +16,7 @@ const maxBodyLength = 10 * 1024
 
 type DebugLogger struct {
 	logger *log.Logger
+	file   *os.File
 	mu     sync.Mutex
 }
 
@@ -71,11 +72,18 @@ func Init(debug bool, logFile string) {
 				log.Printf("Failed to open debug log file: %v, falling back to stdout", err)
 			} else {
 				output = f
+				defaultLogger.file = f
 			}
 		}
 
 		defaultLogger.logger = log.New(output, "", 0)
 	})
+}
+
+func Close() {
+	if defaultLogger != nil && defaultLogger.file != nil {
+		defaultLogger.file.Close()
+	}
 }
 
 func Enabled() bool {
@@ -158,7 +166,7 @@ func redactedHeaders(headers http.Header) map[string]string {
 	result := make(map[string]string)
 	for k, v := range headers {
 		value := strings.Join(v, ", ")
-		if k == "Authorization" || k == "authorization" {
+		if http.CanonicalHeaderKey(k) == "Authorization" {
 			value = redactToken(value)
 		}
 		result[k] = value

@@ -363,6 +363,7 @@ func Run() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
+	debug.Close()
 	log.Println("Server exited")
 }
 

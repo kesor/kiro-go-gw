@@ -89,13 +89,16 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 		resp, err := client.Do(req)
 		duration := time.Since(startTime).Milliseconds()
 
-		if err == nil {
+		debug.LogRequest(debug.EventSourceAmazonQ, method, url, req.Header, bodyBytes, duration)
+
+		if err != nil {
+			debug.LogResponse(debug.EventSourceAmazonQ, method, url, 0, nil, []byte(err.Error()), duration)
+		} else if stream {
+			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, []byte("[streaming]"), duration)
+		} else {
 			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-			debug.LogRequest(debug.EventSourceAmazonQ, method, url, req.Header, bodyBytes, duration)
 			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, respBody, duration)
-		} else {
-			debug.LogRequest(debug.EventSourceAmazonQ, method, url, req.Header, bodyBytes, duration)
 		}
 
 		if err != nil {
@@ -229,24 +232,23 @@ func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string)
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime).Milliseconds()
 
-	if err == nil {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-		debug.LogRequest(debug.EventSourceAmazonQ, "POST", endpoint, req.Header, jsonData, duration)
-		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, respBody, duration)
-	} else {
-		debug.LogRequest(debug.EventSourceAmazonQ, "POST", endpoint, req.Header, jsonData, duration)
-	}
+	debug.LogRequest(debug.EventSourceAmazonQ, "POST", endpoint, req.Header, jsonData, duration)
 
 	if err != nil {
+		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, 0, nil, []byte(err.Error()), duration)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, body, duration)
 		return nil, fmt.Errorf("ListAvailableModels failed: %s", body)
 	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+	debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, respBody, duration)
 
 	var result ListModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
