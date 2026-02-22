@@ -95,10 +95,12 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 			debug.LogResponse(debug.EventSourceAmazonQ, method, url, 0, nil, []byte(err.Error()), duration)
 		} else if stream {
 			if resp.StatusCode >= 400 {
-				respBody, _ := io.ReadAll(resp.Body)
-				resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-				debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, respBody, duration)
-			} else {
+				if debug.Enabled() {
+					respBody, _ := io.ReadAll(resp.Body)
+					resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+					debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, respBody, duration)
+				}
+			} else if debug.Enabled() {
 				debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, []byte("[streaming]"), duration)
 			}
 		} else if debug.Enabled() {
