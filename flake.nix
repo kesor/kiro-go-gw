@@ -24,7 +24,7 @@
         packages.kiro-go-gw = pkgs.buildGoModule {
           pname = "kiro-go-gw";
           version = "0.1.0";
-          src = kiro-go-gw-src;
+          src = self;
           vendorHash = pkgs.lib.fakeHash;
           subPackages = [ "cmd/server" ];
           buildInputs = [ pkgs.sqlite ];
