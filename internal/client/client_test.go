@@ -886,3 +886,94 @@ func TestKiroClientWithRealCredentials_ImageRecognition(t *testing.T) {
 		t.Fatalf("Response too short: %s", bodyStr)
 	}
 }
+
+func TestListAvailableModels(t *testing.T) {
+	mockAuth := &mockAuthManager{
+		token:   "test-token",
+		apiHost: "http://localhost:8080",
+	}
+	client := NewKiroClient(mockAuth)
+
+	var receivedTarget string
+	var receivedAuth string
+	var receivedContentType string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedTarget = r.Header.Get("x-amz-target")
+		receivedAuth = r.Header.Get("Authorization")
+		receivedContentType = r.Header.Get("Content-Type")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"defaultModel": {
+				"modelId": "auto",
+				"modelName": "auto",
+				"description": "Default model"
+			},
+			"models": [
+				{
+					"modelId": "claude-sonnet-4.5",
+					"modelName": "claude-sonnet-4.5",
+					"description": "Claude Sonnet 4.5",
+					"promptCaching": {"supportsPromptCaching": true},
+					"rateMultiplier": 1.3,
+					"rateUnit": "Credit",
+					"tokenLimits": {"maxInputTokens": 200000}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	// Override the API host to use our test server
+	originalHost := mockAuth.apiHost
+	mockAuth.apiHost = server.URL
+
+	resp, err := client.ListAvailableModels(context.Background(), "arn:aws:codewhisperer:us-east-1:123456789:profile/test")
+
+	mockAuth.apiHost = originalHost
+
+	if err != nil {
+		t.Fatalf("ListAvailableModels failed: %v", err)
+	}
+
+	if receivedTarget != "AmazonCodeWhispererService.ListAvailableModels" {
+		t.Errorf("x-amz-target: got %q, want %q", receivedTarget, "AmazonCodeWhispererService.ListAvailableModels")
+	}
+
+	if !strings.HasPrefix(receivedAuth, "Bearer ") {
+		t.Errorf("Authorization: got %q, want Bearer token", receivedAuth)
+	}
+
+	if receivedContentType != "application/x-amz-json-1.0" {
+		t.Errorf("Content-Type: got %q, want %q", receivedContentType, "application/x-amz-json-1.0")
+	}
+
+	if resp == nil {
+		t.Fatal("Response is nil")
+	}
+
+	if resp.DefaultModel == nil {
+		t.Error("DefaultModel is nil")
+	} else if resp.DefaultModel.ModelID != "auto" {
+		t.Errorf("DefaultModel.ModelID: got %q, want %q", resp.DefaultModel.ModelID, "auto")
+	}
+
+	if len(resp.Models) != 1 {
+		t.Errorf("Models length: got %d, want 1", len(resp.Models))
+	} else {
+		if resp.Models[0].ModelID != "claude-sonnet-4.5" {
+			t.Errorf("Models[0].ModelID: got %q, want %q", resp.Models[0].ModelID, "claude-sonnet-4.5")
+		}
+		if resp.Models[0].RateMultiplier != 1.3 {
+			t.Errorf("Models[0].RateMultiplier: got %v, want %v", resp.Models[0].RateMultiplier, 1.3)
+		}
+		if !resp.Models[0].PromptCaching.SupportsPromptCaching {
+			t.Error("Models[0].PromptCaching.SupportsPromptCaching: got false, want true")
+		}
+		if resp.Models[0].TokenLimits.MaxInputTokens != 200000 {
+			t.Errorf("Models[0].TokenLimits.MaxInputTokens: got %d, want %d", resp.Models[0].TokenLimits.MaxInputTokens, 200000)
+		}
+	}
+}
