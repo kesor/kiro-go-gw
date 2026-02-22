@@ -356,7 +356,7 @@ func (am *AuthManager) refreshTokenKiroDesktop() error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		errMsg := fmt.Errorf("token refresh failed with status: %d, body: %s", resp.StatusCode, string(body)).Error()
+		errMsg := fmt.Errorf("token refresh failed with status: %d", resp.StatusCode).Error()
 		debug.LogAuth("refresh_failed", "Token refresh failed via Kiro Desktop Auth", errMsg, map[string]string{
 			"authType":   "kiro_desktop",
 			"url":        refreshURL,
@@ -496,7 +496,11 @@ func (am *AuthManager) refreshTokenAWSSSO() error {
 
 	accessToken, ok := result["accessToken"].(string)
 	if !ok || accessToken == "" {
-		errMsg := fmt.Sprintf("response does not contain accessToken: %+v", result)
+		var fields []string
+		for k := range result {
+			fields = append(fields, k)
+		}
+		errMsg := fmt.Sprintf("response does not contain accessToken; fields present: %v", fields)
 		debug.LogAuth("refresh_failed", "Token refresh failed via AWS SSO OIDC", errMsg, map[string]string{
 			"authType": "aws_sso",
 			"url":      refreshURL,

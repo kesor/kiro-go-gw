@@ -141,6 +141,9 @@ func LogAuth(event, message, errorMsg string, meta map[string]string) {
 		Meta:      meta,
 	}
 	if event != "" {
+		if e.Meta == nil {
+			e.Meta = make(map[string]string)
+		}
 		e.Meta["event"] = event
 	}
 	defaultLogger.log(e)
@@ -163,10 +166,19 @@ func redactedHeaders(headers http.Header) map[string]string {
 		return nil
 	}
 
+	sensitiveHeaders := map[string]bool{
+		"Authorization":       true,
+		"Cookie":              true,
+		"X-Api-Key":           true,
+		"X-Auth-Token":        true,
+		"Proxy-Authorization": true,
+		"Set-Cookie":          true,
+	}
+
 	result := make(map[string]string)
 	for k, v := range headers {
 		value := strings.Join(v, ", ")
-		if http.CanonicalHeaderKey(k) == "Authorization" {
+		if sensitiveHeaders[http.CanonicalHeaderKey(k)] {
 			value = redactToken(value)
 		}
 		result[k] = value
@@ -175,20 +187,35 @@ func redactedHeaders(headers http.Header) map[string]string {
 }
 
 func redactToken(token string) string {
+	token = strings.TrimSpace(token)
 	if token == "" {
-		return ""
-	}
-
-	if len(token) <= 12 {
 		return "[REDACTED]"
 	}
 
-	prefix := 4
-	if len(token) > 8 {
-		prefix = len(token) - 8
+	lower := strings.ToLower(token)
+	if strings.HasPrefix(lower, "bearer ") || strings.HasPrefix(lower, "basic ") {
+		parts := strings.SplitN(token, " ", 2)
+		if len(parts) == 2 {
+			return parts[0] + " " + redactSecret(parts[1])
+		}
 	}
 
-	return fmt.Sprintf("%s...%s", token[:prefix], token[len(token)-4:])
+	return redactSecret(token)
+}
+
+func redactSecret(secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return "[REDACTED]"
+	}
+
+	if len(secret) <= 8 {
+		return "[REDACTED]"
+	}
+
+	const prefixLen = 4
+	const suffixLen = 4
+	return fmt.Sprintf("%s...%s", secret[:prefixLen], secret[len(secret)-suffixLen:])
 }
 
 func truncate(s string) string {

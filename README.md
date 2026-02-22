@@ -63,7 +63,9 @@ Debug output includes:
 - **Amazon Q requests/responses** - Gateway to Amazon Q HTTP traffic  
 - **Auth events** - Token refresh, rotation, and failures
 
-Sensitive data (API keys, tokens) are automatically redacted in logs.
+Sensitive data (API keys, tokens) are best-effort redacted in logs.
+
+> **Warning:** Debug logs may contain sensitive data. Treat debug logs as sensitive and avoid enabling `DEBUG` in production or sharing log files.
 
 ### Authentication (choose one)
 

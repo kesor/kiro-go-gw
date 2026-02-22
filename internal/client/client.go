@@ -95,7 +95,7 @@ func (c *KiroClient) DoRequest(ctx context.Context, method, url string, payload 
 			debug.LogResponse(debug.EventSourceAmazonQ, method, url, 0, nil, []byte(err.Error()), duration)
 		} else if stream {
 			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, []byte("[streaming]"), duration)
-		} else {
+		} else if debug.Enabled() {
 			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
 			debug.LogResponse(debug.EventSourceAmazonQ, method, url, resp.StatusCode, resp.Header, respBody, duration)
@@ -241,14 +241,18 @@ func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, body, duration)
-		return nil, fmt.Errorf("ListAvailableModels failed: %s", body)
+		if debug.Enabled() {
+			body, _ := io.ReadAll(resp.Body)
+			debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, body, duration)
+		}
+		return nil, fmt.Errorf("ListAvailableModels failed: status %d", resp.StatusCode)
 	}
 
-	respBody, _ := io.ReadAll(resp.Body)
-	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-	debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, respBody, duration)
+	if debug.Enabled() {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+		debug.LogResponse(debug.EventSourceAmazonQ, "POST", endpoint, resp.StatusCode, resp.Header, respBody, duration)
+	}
 
 	var result ListModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
