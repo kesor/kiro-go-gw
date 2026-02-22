@@ -93,6 +93,7 @@ type AuthConfig struct {
 	CliDbFile    string
 	ClientID     string
 	ClientSecret string
+	RefreshURL   string
 }
 
 func NewAuthManager(cfg *AuthConfig) (*AuthManager, error) {
@@ -100,6 +101,7 @@ func NewAuthManager(cfg *AuthConfig) (*AuthManager, error) {
 		config:     cfg,
 		authType:   AuthTypeKiroDesktop,
 		profileArn: cfg.ProfileArn,
+		refreshURL: cfg.RefreshURL,
 	}
 
 	// Load credentials based on priority
