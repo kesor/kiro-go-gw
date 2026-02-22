@@ -14,6 +14,9 @@ fi
 
 exec 1>&2
 
+# Get allownonascii from git config (if set)
+allownonascii=$(git config --type=bool hooks.allownonascii 2>/dev/null || echo "false")
+
 if [ "$allownonascii" != "true" ] &&
 	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
 	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0

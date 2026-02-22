@@ -9,7 +9,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -181,7 +180,7 @@ type TokenLimits struct {
 func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string) (*ListModelsResponse, error) {
 	apiHost := c.authManager.APIHost()
 	origin := "KIRO_CLI"
-	endpoint := fmt.Sprintf("%s/?origin=%s&profileArn=%s", apiHost, origin, url.QueryEscape(profileArn))
+	endpoint := fmt.Sprintf("%s/", apiHost)
 
 	payload := map[string]string{
 		"origin":     origin,

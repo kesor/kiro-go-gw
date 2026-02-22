@@ -108,11 +108,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profileArn := s.authMgr.ProfileArn()
-	if profileArn == "" {
-		http.Error(w, "profileArn not configured", http.StatusBadRequest)
+	if err := s.verifyAPIKey(r); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+
+	profileArn := s.authMgr.ProfileArn()
 
 	kiroModels, err := s.kiroClient.ListAvailableModels(r.Context(), profileArn)
 	if err != nil {
@@ -131,11 +132,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if m.PromptCaching != nil {
 			supportsPromptCaching = m.PromptCaching.SupportsPromptCaching
 		}
+		ownedBy := deriveProvider(m.ModelID)
 		modelList = append(modelList, models.Model{
 			ID:                    m.ModelID,
 			Object:                "model",
 			Created:               0,
-			OwnedBy:               "anthropic",
+			OwnedBy:               ownedBy,
 			Permission:            nil,
 			Description:           m.Description,
 			RateMultiplier:        m.RateMultiplier,
@@ -326,4 +328,21 @@ func Run() {
 	}
 
 	log.Println("Server exited")
+}
+
+func deriveProvider(modelID string) string {
+	switch {
+	case strings.HasPrefix(modelID, "claude-"):
+		return "anthropic"
+	case strings.HasPrefix(modelID, "deepseek-"):
+		return "deepseek"
+	case strings.HasPrefix(modelID, "qwen-"):
+		return "qwen"
+	case strings.HasPrefix(modelID, "mini-max-"):
+		return "minimax"
+	case modelID == "auto":
+		return "kiro"
+	default:
+		return "kiro"
+	}
 }
