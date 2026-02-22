@@ -181,7 +181,7 @@ type TokenLimits struct {
 func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string) (*ListModelsResponse, error) {
 	apiHost := c.authManager.APIHost()
 	origin := "KIRO_CLI"
-	url := fmt.Sprintf("%s/?origin=%s&profileArn=%s", apiHost, origin, url.QueryEscape(profileArn))
+	endpoint := fmt.Sprintf("%s/?origin=%s&profileArn=%s", apiHost, origin, url.QueryEscape(profileArn))
 
 	payload := map[string]string{
 		"origin":     origin,
@@ -193,7 +193,7 @@ func (c *KiroClient) ListAvailableModels(ctx context.Context, profileArn string)
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
