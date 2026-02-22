@@ -78,6 +78,29 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		userInputMessageContext["tools"] = tools
 	}
 
+	// Add images as file path references that trigger fs_read tool
+	// Kiro's server handles reading images via the fs_read tool, not sent directly
+	var images []map[string]interface{}
+	if len(userImages) > 0 {
+		// Convert image URLs to text references that trigger fs_read tool
+		imageRefs := ""
+		for _, img := range userImages {
+			source := img["source"].(map[string]interface{})
+			// If there's a URL field, use it as text reference
+			if url, ok := source["url"].(string); ok {
+				imageRefs += "Image: " + url + "\n"
+			}
+			// Check for bytes (from successful fetch or data URL)
+			if bytes, ok := source["bytes"].(string); ok {
+				images = append(images, img)
+				imageRefs += "[Image data included]\n"
+				_ = bytes
+			}
+		}
+		// Prepend image refs to content
+		userTextContent = imageRefs + userTextContent
+	}
+
 	// Build userInputMessage (following Kiro format)
 	userInputMessage := map[string]interface{}{
 		"content":                 userTextContent,
@@ -86,9 +109,9 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 		"userInputMessageContext": userInputMessageContext,
 	}
 
-	// Add images if present (separate field)
-	if len(userImages) > 0 {
-		userInputMessage["images"] = userImages
+	// Add images to userInputMessage if we have any
+	if len(images) > 0 {
+		userInputMessage["images"] = images
 	}
 
 	// Build conversationState structure (Kiro's native format)
