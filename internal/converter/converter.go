@@ -15,7 +15,17 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	// Find the last user message for currentMessage
 	var userContentBlocks []map[string]interface{}
 	var lastUserMsgIndex int = -1
+	var lastNonSystemIndex int = -1
 
+	// Find the last non-system message index
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "system" {
+			lastNonSystemIndex = i
+			break
+		}
+	}
+
+	// Find the last user message for currentMessage
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
 			userContentBlocks = extractContentBlocks(req.Messages[i].Content)
@@ -27,6 +37,16 @@ func BuildKiroPayload(req *models.ChatCompletionRequest, conversationID, profile
 	// If no user message found or no content blocks, error
 	if len(userContentBlocks) == 0 {
 		return nil, fmt.Errorf("no user message found in request")
+	}
+
+	// Validate that the last non-system message is not a tool message
+	// Tool results cannot be represented as userInputMessage
+	// Allow last message to be user or assistant (for continuing conversations)
+	if lastNonSystemIndex >= 0 && lastUserMsgIndex != lastNonSystemIndex {
+		lastMsgRole := req.Messages[lastNonSystemIndex].Role
+		if lastMsgRole == "tool" {
+			return nil, fmt.Errorf("last message cannot be tool result, expected user or assistant message")
+		}
 	}
 
 	// Build history from all messages EXCEPT the last user message

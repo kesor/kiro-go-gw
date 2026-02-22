@@ -278,10 +278,25 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 		Messages: []models.ChatMessage{
 			{Role: "user", Content: "What is 2+2?"},
 			{
+				Role:    "assistant",
+				Content: "Let me calculate that",
+				ToolCalls: []models.ToolCall{
+					{
+						ID:   "call_abc123",
+						Type: "function",
+						Function: &models.ToolCallFunction{
+							Name:      "calculator",
+							Arguments: `{"expression": "2+2"}`,
+						},
+					},
+				},
+			},
+			{
 				Role:       "tool",
 				Content:    "Result: 4",
 				ToolCallID: "call_abc123",
 			},
+			{Role: "user", Content: "Thanks"},
 		},
 	}
 
@@ -310,8 +325,8 @@ func TestBuildKiroPayload_ToolResults(t *testing.T) {
 	if !ok {
 		t.Fatal("content is not an array of content blocks")
 	}
-	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "What is 2+2?" {
-		t.Errorf("content: got %v, want [{text: What is 2+2?}]", contentBlocks)
+	if len(contentBlocks) != 1 || contentBlocks[0]["text"] != "Thanks" {
+		t.Errorf("content: got %v, want [{text: Thanks}]", contentBlocks)
 	}
 
 	// Check history contains tool result
