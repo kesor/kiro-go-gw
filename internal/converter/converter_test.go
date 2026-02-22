@@ -301,28 +301,6 @@ func TestBuildKiroPayload_Temperature(t *testing.T) {
 	}
 }
 
-func TestNormalizeModelName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"claude-sonnet-4.5", "claude-sonnet-4.5"},
-		{"claude-haiku-4-5", "claude-haiku-4.5"},
-		{"claude-haiku-4-5-20251001", "claude-haiku-4.5"},
-		{"claude-opus-3-0", "claude-opus-3.0"},
-		{"claude-opus-3-0-20250630", "claude-opus-3.0"},
-		{"auto", "auto"},
-		{"deepseek-v3.2", "deepseek-v3.2"},
-	}
-
-	for _, tc := range tests {
-		result := normalizeModelName(tc.input)
-		if result != tc.expected {
-			t.Errorf("normalizeModelName(%q): got %q, want %q", tc.input, result, tc.expected)
-		}
-	}
-}
-
 func TestExtractTextContent(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -448,5 +426,44 @@ func TestConvertTools_EmptyName(t *testing.T) {
 	// Empty name should be skipped
 	if len(result) != 0 {
 		t.Errorf("convertTools: got %d tools, want 0", len(result))
+	}
+}
+
+func TestNormalizeModelName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Already normalized
+		{"claude-haiku-4.5", "claude-haiku-4.5"},
+		{"claude-sonnet-4.5", "claude-sonnet-4.5"},
+		{"claude-opus-4.5", "claude-opus-4.5"},
+
+		// Dash to dot conversion
+		{"claude-haiku-4-5", "claude-haiku-4.5"},
+		{"claude-sonnet-4-5", "claude-sonnet-4.5"},
+		{"claude-opus-4-5", "claude-opus-4.5"},
+		{"claude-haiku-3-5", "claude-haiku-3.5"},
+		{"claude-haiku-3-0", "claude-haiku-3.0"},
+		{"claude-sonnet-4-0", "claude-sonnet-4.0"},
+
+		// Date suffix removal
+		{"claude-haiku-4-5-20251001", "claude-haiku-4.5"},
+		{"claude-haiku-4-5-latest", "claude-haiku-4.5"},
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4.5"},
+
+		// Other models (pass through)
+		{"auto", "auto"},
+		{"deepseek-v3.2", "deepseek-v3.2"},
+		{"qwen3-coder-next", "qwen3-coder-next"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeModelName(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeModelName(%q): got %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }

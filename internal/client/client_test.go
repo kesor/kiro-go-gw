@@ -1,13 +1,20 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"kiro-go-gw/internal/auth"
 )
 
 // mockAuthManager implements a mock for testing
@@ -328,4 +335,142 @@ func TestDoRequest_NonStreamingSingleRetry(t *testing.T) {
 	if callCount != MaxRetries {
 		t.Errorf("Non-streaming should retry %d times, got %d", MaxRetries, callCount)
 	}
+}
+
+func TestKiroClientWithRealCredentials(t *testing.T) {
+	if os.Getenv("KIRO_INTEGRATION_TEST") != "1" {
+		t.Skip("Set KIRO_INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	dbPath := os.Getenv("KIRO_CLI_DB_FILE")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("No home directory found, skipping integration test")
+		}
+		dbPath = filepath.Join(home, ".local", "share", "kiro-cli", "data.sqlite3")
+	}
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Skipf("SQLite database not found at %s, skipping integration test", dbPath)
+	}
+
+	region := os.Getenv("KIRO_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	cfg := &auth.AuthConfig{
+		CliDbFile: dbPath,
+		Region:    region,
+	}
+
+	authManager, err := auth.NewAuthManager(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create AuthManager: %v", err)
+	}
+
+	t.Logf("Auth type: %s", authManager.AuthType())
+	t.Logf("API Host: %s", authManager.APIHost())
+
+	client := NewKiroClient(authManager)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// First, try to get a token and see its status
+	token, err := authManager.GetAccessToken()
+	if err != nil {
+		t.Fatalf("GetAccessToken failed: %v", err)
+	}
+	t.Logf("Got access token, length: %d", len(token))
+
+	// Make a direct HTTP request to see the actual response
+	chatURL := authManager.APIHost() + "/generateAssistantResponse"
+	t.Logf("Making request to: %s", chatURL)
+
+	// Test with a simple chat completion request (using Kiro's native format)
+	// This matches what Python's build_kiro_payload creates
+	payload := map[string]interface{}{
+		"conversationState": map[string]interface{}{
+			"chatTriggerType": "MANUAL",
+			"conversationId":  "conv-" + strings.Repeat("x", 32),
+			"currentMessage": map[string]interface{}{
+				"userInputMessage": map[string]interface{}{
+					"content": "Hi",
+					"modelId": "claude-haiku-4.5",
+					"origin":  "AI_EDITOR",
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal payload: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", chatURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "aws-sdk-js/1.0.27 ua/2.1 os/linux lang/go")
+	req.Header.Set("x-amz-user-agent", "aws-sdk-js/1.0.27 KiroGateway/1.0")
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
+	req.Header.Set("x-amzn-kiro-agent-mode", "vibe")
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+	t.Logf("Response status: %d", resp.StatusCode)
+
+	// Check if it's a streaming response (SSE format)
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "assistantResponseEvent") {
+		preview := bodyStr
+		if len(preview) > 100 {
+			preview = preview[:100]
+		}
+		t.Logf("Got streaming response! Preview: %s", preview)
+		t.Logf("SUCCESS: Authentication and API request both work!")
+		return
+	}
+
+	// Non-streaming: try to parse as JSON
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", resp.StatusCode, bodyStr)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	t.Logf("Successfully connected to Kiro API!")
+	t.Logf("Response keys: %v", reflectkeys(result))
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func reflectkeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
