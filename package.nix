@@ -1,10 +1,9 @@
 {
   buildGoModule,
-  lib,
+  pkg-config,
+  sqlite,
   src,
   vendorHash,
-  sqlite,
-  pkg-config,
 }:
 
 let

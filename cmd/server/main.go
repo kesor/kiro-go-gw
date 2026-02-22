@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"kiro-go-gw/internal/config"
+	"kiro-go-gw/internal/debug"
 	"kiro-go-gw/internal/server"
 )
 
@@ -22,6 +23,9 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	// Force debug.Init to be included
+	_ = debug.Init(cfg.Debug, cfg.DebugLogFile)
 
 	hasCreds := cfg.RefreshToken != "" || cfg.CredsFile != "" || cfg.CliDbFile != ""
 	if !hasCreds {

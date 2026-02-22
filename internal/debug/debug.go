@@ -1,3 +1,4 @@
+// Package debug provides debug logging functionality for the Kiro gateway.
 package debug
 
 import (
@@ -22,7 +23,7 @@ type DebugLogger struct {
 
 var (
 	defaultLogger *DebugLogger
-	once          sync.Once
+	initOnce      sync.Once
 )
 
 type EventType string
@@ -56,28 +57,30 @@ type Event struct {
 	Meta      map[string]string `json:"meta,omitempty"`
 }
 
-func Init(debug bool, logFile string) {
-	once.Do(func() {
-		defaultLogger = &DebugLogger{}
+//go:noinline
+func Init(debug bool, logFile string) bool {
+	initOnce.Do(func() {
+		if debug {
+			defaultLogger = &DebugLogger{}
 
-		if !debug {
-			defaultLogger.logger = log.New(io.Discard, "", 0)
-			return
-		}
-
-		var output io.Writer = os.Stdout
-		if logFile != "" {
-			f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err != nil {
-				log.Printf("Failed to open debug log file: %v, falling back to stdout", err)
-			} else {
-				output = f
-				defaultLogger.file = f
+			var output io.Writer = os.Stdout
+			if logFile != "" {
+				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+				if err != nil {
+					log.Printf("Failed to open debug log file: %v, falling back to stdout", err)
+				} else {
+					output = f
+					defaultLogger.file = f
+				}
 			}
-		}
 
-		defaultLogger.logger = log.New(output, "", 0)
+			defaultLogger.logger = log.New(output, "", 0)
+		} else {
+			defaultLogger = &DebugLogger{}
+			defaultLogger.logger = log.New(io.Discard, "", 0)
+		}
 	})
+	return debug
 }
 
 func Close() {
@@ -91,7 +94,7 @@ func Enabled() bool {
 }
 
 func LogRequest(source EventSource, method, url string, headers http.Header, body []byte, duration int64) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
@@ -109,7 +112,7 @@ func LogRequest(source EventSource, method, url string, headers http.Header, bod
 }
 
 func LogResponse(source EventSource, method, url string, status int, headers http.Header, body []byte, duration int64) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
@@ -128,7 +131,7 @@ func LogResponse(source EventSource, method, url string, status int, headers htt
 }
 
 func LogAuth(event, message, errorMsg string, meta map[string]string) {
-	if !Enabled() {
+	if !Enabled() || defaultLogger == nil {
 		return
 	}
 
