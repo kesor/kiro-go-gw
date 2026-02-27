@@ -20,7 +20,7 @@
       {
         packages.kiro-go-gw = pkgs.callPackage ./package.nix {
           src = self;
-          vendorHash = "sha256-3fikKiBH4RnUMg9xtr3MNBaxTNObGMAVbaXh4WBQne8=";
+          vendorHash = "sha256-j+w5C3OGRZfVYgf4DVE7xYiuYq0pztOtAzsE5iDOR6M=";
         };
 
         packages.default = self.packages.${system}.kiro-go-gw;
